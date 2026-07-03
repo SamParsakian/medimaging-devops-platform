@@ -1,0 +1,72 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+*.coverage
+htmlcov/
+
+# --- Secrets & environment files ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# --- Docker runtime data & volumes ---
+docker-data/
+volumes/
+**/pgdata/
+**/postgres-data/
+
+# --- MinIO data ---
+minio-data/
+**/minio/data/
+
+# --- Orthanc storage ---
+orthanc-data/
+**/orthanc/db/
+**/orthanc/storage/
+
+# --- Logs ---
+*.log
+logs/
+
+# --- Database dumps ---
+*.sql.gz
+*.dump
+*.bak
+db-dumps/
+
+# --- Test / cache files ---
+.cache/
+.tmp/
+*.tmp
+node_modules/
+
+# --- IDE files ---
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# --- OS files ---
+.DS_Store
+Thumbs.db
+
+# --- Screenshots (keep placeholder only) ---
+screenshots/*
+!screenshots/.gitkeep
+
+# --- Local working notes (not part of tracked history) ---
+worklog/
+reports/

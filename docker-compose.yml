@@ -1,0 +1,6 @@
+# Placeholder for the local stack (Orthanc, PostgreSQL, MinIO, API, monitoring).
+# Services will be added in the next project step.
+
+version: "3.9"
+
+services: {}
