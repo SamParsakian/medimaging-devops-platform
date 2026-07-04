@@ -69,3 +69,31 @@ The upload came back with `"Status": "Success"`, and the study showed up right a
 Screenshot:
 
 ![Orthanc uploaded study with metadata](images/step-2-orthanc-uploaded-study.png)
+
+## Step 3 — DICOM Metadata Extraction
+
+The `studies` table in PostgreSQL was extended to hold real metadata instead of just a placeholder: study and series UIDs, patient ID/name, modality, study date and description, series/instance counts, and a processing status. Since the table was still empty, it was safe to drop and recreate it with the new schema.
+
+A small Python script, `services/metadata-extractor/extract.py`, was added to do the actual extraction. It reads the list of studies from Orthanc's REST API, pulls the relevant DICOM tags for each one, and writes (or updates) a matching row in PostgreSQL. It's a manual, one-shot script for now — no background job, no API, no queue. It runs on the host machine rather than in a container, so it connects to Orthanc and PostgreSQL through `localhost`, using `ORTHANC_HOST`/`POSTGRES_HOST` in `.env`.
+
+Commands used:
+
+```bash
+docker compose ps
+python3 -m venv services/metadata-extractor/.venv
+./services/metadata-extractor/.venv/bin/pip install -r services/metadata-extractor/requirements.txt
+./services/metadata-extractor/.venv/bin/python services/metadata-extractor/extract.py
+```
+
+To check the result:
+
+```bash
+docker exec postgres psql -U medimaging -d medimaging -c "SELECT * FROM studies;"
+```
+
+Running the script against the one demo study already in Orthanc stored a row with patient `CompressedSamples^CT1`, modality `CT`, study date `2004-01-19`, 1 series, and 1 instance — matching what Orthanc itself shows. Running it again updated the same row instead of creating a duplicate.
+
+Screenshots:
+
+![Metadata extractor run](images/step-3-extractor-run.png)
+![PostgreSQL studies row](images/step-3-postgres-studies-row.png)

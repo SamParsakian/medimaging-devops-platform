@@ -14,3 +14,15 @@ Three services make up the base stack:
 - MinIO console: http://localhost:9001
 
 Credentials for all three come from `.env` (copy `.env.example` to get started).
+
+## Metadata extractor
+
+`services/metadata-extractor/extract.py` is a small script, run manually on the host, that reads studies from Orthanc's REST API and stores their metadata in the PostgreSQL `studies` table. Since it runs on the host rather than inside Docker Compose, it connects using `localhost` (via `ORTHANC_HOST` and `POSTGRES_HOST` in `.env`) instead of the container service names.
+
+```bash
+cd services/metadata-extractor
+python3 -m venv .venv
+./.venv/bin/pip install -r requirements.txt
+cd ../..
+./services/metadata-extractor/.venv/bin/python services/metadata-extractor/extract.py
+```
