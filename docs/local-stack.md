@@ -4,7 +4,7 @@ Three services make up the base stack:
 
 - **Orthanc** - the DICOM server (PACS). Receives, stores, and serves medical images, and exposes a REST API and web UI on top of the standard DICOM protocol.
 - **PostgreSQL** - holds structured metadata about the imaging data (e.g. a reference table for studies), separate from the actual image files.
-- **MinIO** - S3-compatible object storage, for anything file-based that isn't a raw DICOM image: processed previews, AI outputs, and backups, added in later steps.
+- **MinIO** - S3-compatible object storage, for anything file-based that isn't in Orthanc directly: processed/anonymized DICOM files today, previews, AI outputs, and backups later.
 
 ## Local URLs
 
@@ -37,4 +37,16 @@ python3 -m venv .venv
 ./.venv/bin/pip install -r requirements.txt
 cd ../..
 ./services/anonymizer/.venv/bin/python services/anonymizer/anonymize.py
+```
+
+## MinIO uploader
+
+`services/minio-uploader/upload.py` takes an anonymized DICOM file and uploads it to MinIO, in the `medimaging` bucket, under a `processed/anonymized/{study_uid}/{filename}` path. It creates the bucket first if it doesn't exist yet.
+
+```bash
+cd services/minio-uploader
+python3 -m venv .venv
+./.venv/bin/pip install -r requirements.txt
+cd ../..
+./services/minio-uploader/.venv/bin/python services/minio-uploader/upload.py
 ```

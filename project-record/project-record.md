@@ -232,3 +232,47 @@ Screenshots:
 ![Original DICOM tags](images/step-4-original-tags.png)
 
 ![Anonymized DICOM tags](images/step-4-anonymized-tags.png)
+
+## Step 5 - Store Anonymized DICOM in MinIO
+
+In this step, the anonymized DICOM file was uploaded to MinIO, as a processed imaging object.
+
+A script was added under:
+
+```text
+services/minio-uploader/upload.py
+```
+
+It creates the bucket if it does not exist yet, then uploads the file. The bucket name is:
+
+```text
+medimaging
+```
+
+The object path pattern is:
+
+```text
+processed/anonymized/{study_uid}/{filename}
+```
+
+The study UID is read directly from the DICOM file itself, not typed in by hand.
+
+Commands used:
+
+```bash
+docker compose ps
+./services/anonymizer/.venv/bin/python services/anonymizer/anonymize.py
+./services/minio-uploader/.venv/bin/python services/minio-uploader/upload.py
+```
+
+Running the script created the `medimaging` bucket and uploaded the file to:
+
+```text
+processed/anonymized/1.3.6.1.4.1.5962.1.2.1.20040119072730.12322/anonymized_CT_small.dcm
+```
+
+Running it a second time reused the existing bucket and just uploaded the file again to the same path. The object was also checked directly by listing the bucket's contents through the MinIO client.
+
+Screenshot:
+
+![MinIO console showing uploaded object](images/step-5-minio-object.png)
