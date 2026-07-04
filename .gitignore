@@ -70,3 +70,4 @@ screenshots/*
 # --- Local working notes (not part of tracked history) ---
 worklog/
 reports/
+screenshots

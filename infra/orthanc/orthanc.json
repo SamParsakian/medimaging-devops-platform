@@ -1,0 +1,10 @@
+{
+  "Name": "MedImagingDevOpsOrthanc",
+  "RemoteAccessAllowed": true,
+  "AuthenticationEnabled": true,
+  "DicomAet": "MEDIMAGING",
+  "DicomPort": 4242,
+  "HttpPort": 8042,
+  "StorageDirectory": "/var/lib/orthanc/db",
+  "IndexDirectory": "/var/lib/orthanc/db"
+}

@@ -26,3 +26,28 @@ Screenshot:
 ![Tool versions confirmed](images/step-0-tool-versions.png)
 
 All three tools were found installed and working, so nothing was blocking the start of the actual build.
+
+## Step 1 — Base Docker Compose Stack
+
+The Docker Compose file was filled in with the first three real services: Orthanc for DICOM storage, PostgreSQL for imaging metadata, and MinIO for object storage. Each service was given a named volume, a restart policy, and a basic health check.
+
+A minimal Orthanc config file was added at `infra/orthanc/orthanc.json` for non-secret settings like the name and AE title, while the actual login credentials are passed in through an environment variable at container start so they never end up committed to the repo. A small `init.sql` script was added for PostgreSQL, creating a `studies` table to hold basic imaging metadata. `infra/minio/README.md` explains what MinIO is for, even though nothing writes to it yet.
+
+Commands used:
+
+```bash
+docker compose config
+docker compose up -d
+docker compose ps
+docker volume ls
+```
+
+One problem came up along the way: the Orthanc image doesn't ship with `curl`, so the health check that was written for it kept failing even though the server itself was working fine. It was rewritten to use `python3`, which is available in the image, with a small script that sends an authenticated request instead.
+
+All three containers ended up running and healthy, each with its own Docker volume, and Orthanc's REST API responded correctly once queried with the configured credentials.
+
+Screenshots:
+
+![Docker containers running](images/step-1-docker-containers-running.png)
+![Orthanc running](images/step-1-orthanc-login-or-dashboard.png)
+![MinIO console](images/step-1-minio-console.png)
