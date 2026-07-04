@@ -1,6 +1,6 @@
 # MinIO
 
-MinIO is the object storage service for this project. At this stage it's just running alongside Orthanc and PostgreSQL — no buckets are created automatically yet.
+MinIO is the object storage service for this project. At this stage it's just running alongside Orthanc and PostgreSQL - no buckets are created automatically yet.
 
 Later steps will start writing to it: processed image previews, AI inference outputs, and periodic backups of the Orthanc and PostgreSQL data.
 

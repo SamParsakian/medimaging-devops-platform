@@ -4,7 +4,7 @@ To check that Orthanc actually receives and stores images, one small public/demo
 
 - Source: https://github.com/pydicom/pydicom/raw/main/src/pydicom/data/test_files/CT_small.dcm
 - License: pydicom is MIT licensed, and this file ships as part of its public test suite specifically for testing DICOM tools like this one.
-- It is a small, already-anonymized test file — not real patient data.
+- It is a small, already-anonymized test file - not real patient data.
 
 The file itself is not stored in this repo. It's downloaded on demand by `scripts/upload-sample-dicom.sh`, which also uploads it straight to the local Orthanc instance through its REST API.
 

@@ -75,3 +75,6 @@ screenshots
 # --- Downloaded sample DICOM files (fetched on demand, not stored in repo) ---
 sample-data/*.dcm
 sample-data/downloads/
+
+# --- Generated anonymized DICOM output (not stored in repo) ---
+services/anonymizer/output/

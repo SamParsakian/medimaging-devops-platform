@@ -1,7 +1,7 @@
 """
 One-shot script: reads every study currently in Orthanc and stores its
 metadata in the PostgreSQL `studies` table. Meant to be run manually
-for now — no background queue, no API, no scheduling.
+for now - no background queue, no API, no scheduling.
 """
 
 import os
