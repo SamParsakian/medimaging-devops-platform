@@ -71,3 +71,7 @@ screenshots/*
 worklog/
 reports/
 screenshots
+
+# --- Downloaded sample DICOM files (fetched on demand, not stored in repo) ---
+sample-data/*.dcm
+sample-data/downloads/

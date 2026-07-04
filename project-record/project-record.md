@@ -51,3 +51,21 @@ Screenshots:
 ![Docker containers running](images/step-1-docker-containers-running.png)
 ![Orthanc running](images/step-1-orthanc-login-or-dashboard.png)
 ![MinIO console](images/step-1-minio-console.png)
+
+## Step 2 — Sample DICOM Upload
+
+To check that Orthanc actually receives and stores images, one small public test file was used: `CT_small.dcm` from the pydicom project's test data (MIT licensed, already anonymized, not real patient data). A script, `scripts/upload-sample-dicom.sh`, downloads it on the fly and uploads it straight to Orthanc through its REST API. The file itself is not stored in this repo.
+
+Commands used:
+
+```bash
+docker compose ps
+./scripts/upload-sample-dicom.sh
+curl -s -u orthanc:changeme http://localhost:8042/studies
+```
+
+The upload came back with `"Status": "Success"`, and the study showed up right away when querying Orthanc's `/studies` endpoint. Checking the study's details showed a patient named `CompressedSamples^CT1` with patient ID `1CT1` — the well-known synthetic identity that ships with this test file, not a real person.
+
+Screenshot:
+
+![Orthanc uploaded study with metadata](images/step-2-orthanc-uploaded-study.png)
