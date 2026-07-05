@@ -4,14 +4,14 @@ from the PostgreSQL `studies` table (populated by
 services/metadata-extractor/extract.py), plus a small static
 dashboard (services/api/static/) that reads the same endpoints, and
 a basic audit trail of who looked at what. No real auth yet - one
-fixed demo user.
+fixed demo user, protected by a single shared API key.
 """
 
 import os
 
 import psycopg2
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from minio import Minio
 from minio.error import S3Error
@@ -36,7 +36,28 @@ DEMO_DATA_ONLY = True
 # No real auth yet - every request is logged under this one demo user.
 DEMO_USER_ID = "demo-user"
 
+# Demo-grade security: one shared API key from the environment, checked
+# against either the X-API-Key header or an api_key query parameter (the
+# query param exists so a browser can load /dashboard/?api_key=... directly).
+API_SECRET_KEY = os.environ.get("API_SECRET_KEY", "changeme")
+PUBLIC_PATHS = {"/health", "/docs", "/openapi.json", "/redoc"}
+
 app = FastAPI(title="Medical Imaging Study API")
+
+
+@app.middleware("http")
+async def require_api_key(request: Request, call_next):
+    if request.url.path in PUBLIC_PATHS:
+        return await call_next(request)
+
+    provided_key = request.headers.get("X-API-Key") or request.query_params.get("api_key")
+
+    if not provided_key:
+        return JSONResponse(status_code=401, content={"detail": "Missing API key"})
+    if provided_key != API_SECRET_KEY:
+        return JSONResponse(status_code=403, content={"detail": "Invalid API key"})
+
+    return await call_next(request)
 
 STUDY_COLUMNS = (
     "orthanc_study_id, study_instance_uid, patient_id, modality, "
