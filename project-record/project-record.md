@@ -900,3 +900,123 @@ One pipeline script was also run directly in the terminal, without Docker Compos
 ```
 
 ![Terminal output of the metadata extractor showing its three structured JSON log lines: extract_run started, one extract_study success, extract_run done](images/step-13-pipeline-logs.png)
+
+## Step 14 - Monitoring with Prometheus and Grafana
+
+In this step, Prometheus and Grafana were added to the stack so the API's health and activity can be watched on a dashboard instead of only being visible through logs.
+
+Structured logs from Step 13 are good for looking at one event after it happened, but they don't show trends over time, like whether request counts are climbing or a metric is slowly getting worse. Prometheus and Grafana are the standard pair of tools for that: Prometheus collects numbers on a timer and stores them, and Grafana draws them as a dashboard.
+
+Two new containers were added to `docker-compose.yml`:
+
+```yaml
+prometheus:
+  image: prom/prometheus:latest
+  ports:
+    - "${PROMETHEUS_PORT:-9090}:9090"
+  volumes:
+    - ./infra/monitoring/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    - prometheus-data:/prometheus
+
+grafana:
+  image: grafana/grafana:latest
+  ports:
+    - "${GRAFANA_PORT:-3000}:3000"
+  environment:
+    GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+    GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-changeme}
+  volumes:
+    - ./infra/monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+    - ./infra/monitoring/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    - grafana-data:/var/lib/grafana
+```
+
+The API needed something for Prometheus to actually scrape, so a new public endpoint was added using the `prometheus-client` Python library:
+
+```python
+@app.get("/metrics")
+def metrics():
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM studies")
+            STUDIES_TOTAL.set(cur.fetchone()[0])
+            cur.execute(
+                "SELECT COUNT(*) FROM studies WHERE "
+                "processing_status = 'failed' OR anonymization_status = 'failed' "
+                "OR preview_status = 'failed' OR upload_status = 'failed'"
+            )
+            STUDIES_FAILED_TOTAL.set(cur.fetchone()[0])
+    finally:
+        conn.close()
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+```
+
+`/metrics` doesn't require the API key. Prometheus has no way to send one, so it was added to the same public path list as `/health`, and it isn't counted as API traffic itself, same as `/health` already wasn't.
+
+The API now tracks these metrics:
+
+```text
+http_requests_total            - counter, labeled by method, path, and status code
+http_request_duration_seconds  - histogram of how long each request took
+studies_total                  - gauge, current row count in the studies table
+studies_failed_total           - gauge, studies with at least one failed pipeline stage
+process_start_time_seconds     - when the process started, built into the prometheus-client library itself
+```
+
+`studies_total` and `studies_failed_total` are set fresh from Postgres every time `/metrics` is scraped, so they can never go stale between scrapes. The request counter and duration are recorded in the same middleware that already logged every request in Step 13, right next to that existing `log_event` call:
+
+```python
+REQUEST_COUNT.labels(method=method, path=path, status_code=str(response.status_code)).inc()
+REQUEST_DURATION.labels(method=method, path=path).observe(duration_seconds)
+```
+
+Prometheus's own config, at `infra/monitoring/prometheus/prometheus.yml`, tells it to scrape itself and the API every 15 seconds:
+
+```yaml
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  - job_name: api
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["api:8000"]
+```
+
+Grafana needed no manual setup at all. Both its Prometheus connection and its dashboard are provisioned automatically from files under `infra/monitoring/grafana/` the moment the container starts:
+
+```text
+infra/monitoring/grafana/provisioning/datasources/prometheus.yml   - the Prometheus connection
+infra/monitoring/grafana/provisioning/dashboards/dashboards.yml    - tells Grafana where to find dashboard files
+infra/monitoring/grafana/dashboards/api-overview.json              - the dashboard itself
+```
+
+The datasource file pins a fixed `uid: prometheus`, and every panel in the dashboard JSON points at that same uid, so Grafana always wires the dashboard to the right datasource on a fresh start rather than relying on a name match.
+
+The dashboard, "Imaging API Overview," has six panels: API Up, Service Health (the `up` value for every scrape target, not just the API), Failed Processing Count, Total API Requests, Average Request Duration, and Studies Total. Container-level metrics (CPU, memory per container) were left out of this step on purpose - a tool like cAdvisor could add those later, but it brings its own compatibility quirks on Docker Desktop for Mac, and Docker Compose's existing per-container healthchecks (from Step 1) already cover the basic "is this container alive" question without adding another moving part.
+
+To check this for real, the whole stack was brought up together first, and each new piece was checked in turn.
+
+All six containers were confirmed running at once in Docker Desktop, the fourth and fifth from the left being the two new ones added in this step:
+
+![Docker Desktop showing all six containers running: orthanc, postgres, minio, api, prometheus, and grafana](images/step-14-docker-desktop-containers.png)
+
+The API's `/metrics` endpoint was queried directly, to confirm it returns real Prometheus-formatted numbers instead of an error:
+
+```bash
+curl http://localhost:8000/metrics
+```
+
+Prometheus's own Targets page (**Status → Targets** in its web UI) was opened next, to confirm it can actually reach both the API and itself on a schedule, not just that the config file looks right:
+
+![Prometheus Targets page showing both the api and prometheus scrape jobs as UP](images/step-14-prometheus-targets.png)
+
+Grafana was opened for the first time at `localhost:3000`, which shows its login page. Logging in uses the demo admin credentials from `.env` (`GRAFANA_ADMIN_USER` / `GRAFANA_ADMIN_PASSWORD`), not a personal account:
+
+![Grafana's login page at localhost:3000](images/step-14-grafana-login.png)
+
+After logging in, the provisioned "Imaging API Overview" dashboard was opened directly, with all six panels already showing live numbers instead of "No data":
+
+![Grafana "Imaging API Overview" dashboard showing all six panels with live data](images/step-14-grafana-dashboard.png)
