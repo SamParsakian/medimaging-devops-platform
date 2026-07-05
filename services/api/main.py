@@ -14,12 +14,26 @@ from datetime import datetime, timezone
 
 import psycopg2
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from minio import Minio
 from minio.error import S3Error
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
 
 SERVICE_NAME = "api"
+
+REQUEST_COUNT = Counter(
+    "http_requests_total", "Total HTTP requests handled by the API",
+    ["method", "path", "status_code"],
+)
+REQUEST_DURATION = Histogram(
+    "http_request_duration_seconds", "HTTP request duration in seconds",
+    ["method", "path"],
+)
+STUDIES_TOTAL = Gauge("studies_total", "Total number of studies in the studies table")
+STUDIES_FAILED_TOTAL = Gauge(
+    "studies_failed_total", "Number of studies with at least one failed pipeline stage",
+)
 
 
 def log_event(action, status="success", study_id=None, error=None, level="INFO", **extra):
@@ -62,16 +76,17 @@ DEMO_USER_ID = "demo-user"
 # against either the X-API-Key header or an api_key query parameter (the
 # query param exists so a browser can load /dashboard/?api_key=... directly).
 API_SECRET_KEY = os.environ.get("API_SECRET_KEY", "changeme")
-PUBLIC_PATHS = {"/health", "/docs", "/openapi.json", "/redoc"}
+PUBLIC_PATHS = {"/health", "/docs", "/openapi.json", "/redoc", "/metrics"}
 
 app = FastAPI(title="Medical Imaging Study API")
 
 
 @app.middleware("http")
 async def require_api_key(request: Request, call_next):
-    # Docker's own healthcheck hits this path every 30 seconds - it's a
-    # liveness ping, not a real event, so it's not worth logging.
-    if request.url.path == "/health":
+    # Docker's own healthcheck, and Prometheus scraping /metrics, both hit
+    # this middleware every few seconds - neither is a real event worth
+    # logging or counting as API traffic.
+    if request.url.path in {"/health", "/metrics"}:
         return await call_next(request)
 
     started = time.monotonic()
@@ -82,12 +97,14 @@ async def require_api_key(request: Request, call_next):
         provided_key = request.headers.get("X-API-Key") or request.query_params.get("api_key")
 
         if not provided_key:
+            REQUEST_COUNT.labels(method=method, path=path, status_code="401").inc()
             log_event(
                 "http_request", status="unauthorized", level="WARNING",
                 method=method, path=path, status_code=401,
             )
             return JSONResponse(status_code=401, content={"detail": "Missing API key"})
         if provided_key != API_SECRET_KEY:
+            REQUEST_COUNT.labels(method=method, path=path, status_code="403").inc()
             log_event(
                 "http_request", status="forbidden", level="WARNING",
                 method=method, path=path, status_code=403,
@@ -95,7 +112,10 @@ async def require_api_key(request: Request, call_next):
             return JSONResponse(status_code=403, content={"detail": "Invalid API key"})
 
     response = await call_next(request)
-    duration_ms = round((time.monotonic() - started) * 1000, 1)
+    duration_seconds = time.monotonic() - started
+    duration_ms = round(duration_seconds * 1000, 1)
+    REQUEST_COUNT.labels(method=method, path=path, status_code=str(response.status_code)).inc()
+    REQUEST_DURATION.labels(method=method, path=path).observe(duration_seconds)
     log_event(
         "http_request",
         status="success" if response.status_code < 400 else "error",
@@ -188,6 +208,26 @@ def log_audit_event(request: Request, action: str, study_id, status: str):
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+@app.get("/metrics")
+def metrics():
+    """Prometheus scrapes this. studies_total and studies_failed_total are
+    refreshed from Postgres on every scrape, so they're never stale."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) FROM studies")
+            STUDIES_TOTAL.set(cur.fetchone()[0])
+            cur.execute(
+                "SELECT COUNT(*) FROM studies WHERE "
+                "processing_status = 'failed' OR anonymization_status = 'failed' "
+                "OR preview_status = 'failed' OR upload_status = 'failed'"
+            )
+            STUDIES_FAILED_TOTAL.set(cur.fetchone()[0])
+    finally:
+        conn.close()
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 @app.get("/studies")
