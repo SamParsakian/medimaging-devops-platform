@@ -438,3 +438,84 @@ Screenshots:
 ![GET /studies response](images/step-7-studies-response.png)
 
 ![GET /studies/{id}/preview-info response](images/step-7-preview-info-response.png)
+
+## Step 8 - Simple Imaging Dashboard
+
+In this step, a small dashboard was added so studies can be browsed visually instead of through curl or Swagger.
+
+It's served by the same FastAPI service, as static files under:
+
+```text
+services/api/static/
+```
+
+Files:
+
+```text
+index.html
+style.css
+app.js
+```
+
+Plain HTML, CSS, and vanilla JavaScript - no framework. The files are served by mounting this folder in `main.py`:
+
+```python
+app.mount("/dashboard", StaticFiles(directory="static", html=True), name="dashboard")
+```
+
+The page fetches `GET /studies` to build a table on the left. Clicking a row fetches `GET /studies/{id}` and `GET /studies/{id}/preview-info` and fills in a detail panel on the right, including the preview image.
+
+MinIO's bucket is private, so the browser can't load the preview image directly from MinIO. A new endpoint streams it through the API instead:
+
+```python
+@app.get("/studies/{study_id}/preview-image")
+def get_preview_image(study_id: str):
+    study = fetch_study(study_id)
+    object_path = study["preview_object_path"]
+    if not object_path:
+        raise HTTPException(status_code=404, detail="No preview available for this study")
+
+    client = get_minio_client()
+    try:
+        response = client.get_object(MINIO_BUCKET, object_path)
+    except S3Error as exc:
+        raise HTTPException(status_code=404, detail="Preview object not found in MinIO") from exc
+
+    def iter_content():
+        try:
+            yield from response.stream(32 * 1024)
+        finally:
+            response.close()
+            response.release_conn()
+
+    return StreamingResponse(iter_content(), media_type="image/png")
+```
+
+It reads the study's `preview_object_path` from Postgres, then streams the PNG bytes straight from MinIO. The dashboard's `<img>` tag just points at this endpoint, so the browser never needs MinIO credentials.
+
+`docker-compose.yml`'s `api` service was given MinIO connection details for this:
+
+```yaml
+MINIO_HOST: minio
+MINIO_PORT: 9000
+MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+MINIO_BUCKET: ${MINIO_BUCKET}
+```
+
+Commands used:
+
+```bash
+docker compose up -d --build api
+curl http://localhost:8000/dashboard/
+curl http://localhost:8000/studies/8a8cf898-ca27c490-d0c7058c-929d0581-2bbf104d/preview-image --output test.png
+file test.png
+```
+
+The dashboard was checked manually through the browser at `http://localhost:8000/dashboard/`: the study list loaded with the demo study's Orthanc ID, modality, date, patient ID, status, and preview availability, and clicking it opened the detail panel with the preview image rendered inline and the MinIO object path shown as a technical detail. The `docker compose up -d --build api` rebuild was also checked directly in the terminal. The results are shown in the screenshots below.
+
+Screenshots:
+
+![Dashboard showing the study list and the selected study's detail panel with its preview image](images/step-8-dashboard.png)
+
+![Terminal output of docker compose up -d --build api rebuilding and starting the api container](images/step-8-docker-build.png)
