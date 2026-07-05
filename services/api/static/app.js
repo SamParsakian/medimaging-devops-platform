@@ -1,5 +1,6 @@
 const studiesBody = document.getElementById("studies-body");
 const detailSection = document.getElementById("study-detail");
+const auditBody = document.getElementById("audit-events-body");
 
 function previewBadge(study) {
   return study.preview_object_path
@@ -24,6 +25,27 @@ async function loadStudies() {
     `;
     row.addEventListener("click", () => loadStudyDetail(study.orthanc_study_id));
     studiesBody.appendChild(row);
+  }
+
+  loadAuditEvents();
+}
+
+async function loadAuditEvents() {
+  const response = await fetch("/audit-events");
+  const events = await response.json();
+
+  auditBody.innerHTML = "";
+  for (const event of events) {
+    const row = document.createElement("tr");
+    row.innerHTML = `
+      <td>${event.event_id}</td>
+      <td>${event.timestamp ?? ""}</td>
+      <td>${event.user_id}</td>
+      <td>${event.action}</td>
+      <td>${event.study_id ?? ""}</td>
+      <td>${event.status}</td>
+    `;
+    auditBody.appendChild(row);
   }
 }
 
@@ -52,6 +74,8 @@ async function loadStudyDetail(studyId) {
     </table>
     ${previewBlock}
   `;
+
+  loadAuditEvents();
 }
 
 loadStudies();

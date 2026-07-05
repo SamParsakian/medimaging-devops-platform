@@ -112,3 +112,7 @@ th, td {
   background: #f2f2f2;
   color: #888;
 }
+
+.audit-events {
+  margin-top: 1.5rem;
+}

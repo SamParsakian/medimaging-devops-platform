@@ -2,15 +2,15 @@
 Read-only FastAPI service exposing study metadata and preview info
 from the PostgreSQL `studies` table (populated by
 services/metadata-extractor/extract.py), plus a small static
-dashboard (services/api/static/) that reads the same endpoints. No
-auth, no AI yet - just a demo-grade read API and viewer in front of
-the existing pipeline.
+dashboard (services/api/static/) that reads the same endpoints, and
+a basic audit trail of who looked at what. No real auth yet - one
+fixed demo user.
 """
 
 import os
 
 import psycopg2
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from minio import Minio
@@ -33,6 +33,9 @@ MINIO_BUCKET = os.environ.get("MINIO_BUCKET", "medimaging")
 # is always safe to expose here.
 DEMO_DATA_ONLY = True
 
+# No real auth yet - every request is logged under this one demo user.
+DEMO_USER_ID = "demo-user"
+
 app = FastAPI(title="Medical Imaging Study API")
 
 STUDY_COLUMNS = (
@@ -40,6 +43,8 @@ STUDY_COLUMNS = (
     "study_date, study_description, series_count, instance_count, "
     "processing_status, preview_object_path"
 )
+
+AUDIT_COLUMNS = "event_id, user_id, action, study_id, timestamp, ip_address, status"
 
 
 def get_connection():
@@ -76,13 +81,42 @@ def row_to_study(row):
     }
 
 
+def row_to_audit_event(row):
+    return {
+        "event_id": row[0],
+        "user_id": row[1],
+        "action": row[2],
+        "study_id": row[3],
+        "timestamp": row[4].isoformat() if row[4] else None,
+        "ip_address": row[5],
+        "status": row[6],
+    }
+
+
+def log_audit_event(request: Request, action: str, study_id, status: str):
+    ip_address = request.client.host if request.client else None
+    conn = get_connection()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO audit_events (user_id, action, study_id, ip_address, status)
+                    VALUES (%s, %s, %s, %s, %s)
+                    """,
+                    (DEMO_USER_ID, action, study_id, ip_address, status),
+                )
+    finally:
+        conn.close()
+
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
 
 
 @app.get("/studies")
-def list_studies():
+def list_studies(request: Request):
     conn = get_connection()
     try:
         with conn.cursor() as cur:
@@ -90,6 +124,7 @@ def list_studies():
             rows = cur.fetchall()
     finally:
         conn.close()
+    log_audit_event(request, "list_studies", None, "success")
     return [row_to_study(row) for row in rows]
 
 
@@ -110,13 +145,24 @@ def fetch_study(study_id):
 
 
 @app.get("/studies/{study_id}")
-def get_study(study_id: str):
-    return fetch_study(study_id)
+def get_study(study_id: str, request: Request):
+    try:
+        study = fetch_study(study_id)
+    except HTTPException:
+        log_audit_event(request, "view_study", study_id, "not_found")
+        raise
+    log_audit_event(request, "view_study", study_id, "success")
+    return study
 
 
 @app.get("/studies/{study_id}/preview-info")
-def get_preview_info(study_id: str):
-    study = fetch_study(study_id)
+def get_preview_info(study_id: str, request: Request):
+    try:
+        study = fetch_study(study_id)
+    except HTTPException:
+        log_audit_event(request, "view_preview_info", study_id, "not_found")
+        raise
+    log_audit_event(request, "view_preview_info", study_id, "success")
     return {
         "orthanc_study_id": study["orthanc_study_id"],
         "study_instance_uid": study["study_instance_uid"],
@@ -126,20 +172,29 @@ def get_preview_info(study_id: str):
 
 
 @app.get("/studies/{study_id}/preview-image")
-def get_preview_image(study_id: str):
+def get_preview_image(study_id: str, request: Request):
     """Streams the preview PNG from MinIO, so the dashboard (or any
     browser) can show it without needing direct MinIO access or
     credentials - MinIO's bucket stays private."""
-    study = fetch_study(study_id)
+    try:
+        study = fetch_study(study_id)
+    except HTTPException:
+        log_audit_event(request, "view_preview_image", study_id, "not_found")
+        raise
+
     object_path = study["preview_object_path"]
     if not object_path:
+        log_audit_event(request, "view_preview_image", study_id, "not_found")
         raise HTTPException(status_code=404, detail="No preview available for this study")
 
     client = get_minio_client()
     try:
         response = client.get_object(MINIO_BUCKET, object_path)
     except S3Error as exc:
+        log_audit_event(request, "view_preview_image", study_id, "not_found")
         raise HTTPException(status_code=404, detail="Preview object not found in MinIO") from exc
+
+    log_audit_event(request, "view_preview_image", study_id, "success")
 
     def iter_content():
         try:
@@ -149,6 +204,18 @@ def get_preview_image(study_id: str):
             response.release_conn()
 
     return StreamingResponse(iter_content(), media_type="image/png")
+
+
+@app.get("/audit-events")
+def list_audit_events():
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(f"SELECT {AUDIT_COLUMNS} FROM audit_events ORDER BY event_id DESC LIMIT 50")
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+    return [row_to_audit_event(row) for row in rows]
 
 
 app.mount("/dashboard", StaticFiles(directory="static", html=True), name="dashboard")

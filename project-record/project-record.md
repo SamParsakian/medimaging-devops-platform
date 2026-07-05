@@ -519,3 +519,86 @@ Screenshots:
 ![Dashboard showing the study list and the selected study's detail panel with its preview image](images/step-8-dashboard.png)
 
 ![Terminal output of docker compose up -d --build api rebuilding and starting the api container](images/step-8-docker-build.png)
+
+## Step 9 - Audit Trail
+
+In this step, basic audit logging was added: a record of who looked at what, and when.
+
+A new table was added to PostgreSQL:
+
+```sql
+CREATE TABLE IF NOT EXISTS audit_events (
+    event_id SERIAL PRIMARY KEY,
+    user_id TEXT NOT NULL DEFAULT 'demo-user',
+    action TEXT NOT NULL,
+    study_id TEXT,
+    timestamp TIMESTAMPTZ NOT NULL DEFAULT now(),
+    ip_address TEXT,
+    status TEXT NOT NULL DEFAULT 'success'
+);
+```
+
+This was run directly against the live database, and also added to `infra/postgres/init.sql` for fresh setups. There's no real login system yet, so every event is logged under one fixed `user_id`: `demo-user`.
+
+Four existing endpoints now write a row to this table on every call:
+
+```text
+GET /studies
+GET /studies/{study_id}
+GET /studies/{study_id}/preview-info
+GET /studies/{study_id}/preview-image
+```
+
+A small helper does the logging:
+
+```python
+def log_audit_event(request: Request, action: str, study_id, status: str):
+    ip_address = request.client.host if request.client else None
+    conn = get_connection()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO audit_events (user_id, action, study_id, ip_address, status)
+                    VALUES (%s, %s, %s, %s, %s)
+                    """,
+                    (DEMO_USER_ID, action, study_id, ip_address, status),
+                )
+    finally:
+        conn.close()
+```
+
+Each endpoint calls this with `status` set to `"success"` when the study/preview was found, or `"not_found"` when it wasn't - so a bad study ID still gets logged, not just successful lookups.
+
+A new endpoint reads the log back:
+
+```text
+GET /audit-events
+```
+
+It returns the 50 most recent events, newest first. The dashboard also got a small "Recent Audit Events" table at the bottom of the page, showing the same data, refreshed after every study list load or detail click.
+
+Commands used:
+
+```bash
+docker exec postgres psql -U medimaging -d medimaging -c "CREATE TABLE IF NOT EXISTS audit_events (event_id SERIAL PRIMARY KEY, user_id TEXT NOT NULL DEFAULT 'demo-user', action TEXT NOT NULL, study_id TEXT, timestamp TIMESTAMPTZ NOT NULL DEFAULT now(), ip_address TEXT, status TEXT NOT NULL DEFAULT 'success');"
+docker compose up -d --build api
+curl http://localhost:8000/studies
+curl http://localhost:8000/studies/8a8cf898-ca27c490-d0c7058c-929d0581-2bbf104d
+curl http://localhost:8000/studies/8a8cf898-ca27c490-d0c7058c-929d0581-2bbf104d/preview-info
+curl http://localhost:8000/studies/8a8cf898-ca27c490-d0c7058c-929d0581-2bbf104d/preview-image
+curl http://localhost:8000/studies/does-not-exist
+curl http://localhost:8000/audit-events
+docker exec postgres psql -U medimaging -d medimaging -c "SELECT event_id, action, study_id, status, timestamp FROM audit_events ORDER BY event_id;"
+```
+
+This was checked manually: hitting the four endpoints (including one deliberately bad study ID) produced five rows in `audit_events`, matching what `/audit-events` and a direct query on the table both showed - four `success` events plus one `not_found` for the bad ID. The results are shown in the screenshots below.
+
+Screenshots:
+
+![Terminal query of the audit_events table showing all five logged events](images/step-9-audit-table.png)
+
+![GET /audit-events response in the browser, matching the table](images/step-9-audit-events-response.png)
+
+![Dashboard's Recent Audit Events table at the bottom of the page](images/step-9-dashboard-audit.png)
