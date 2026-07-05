@@ -21,8 +21,14 @@ MINIO_ROOT_USER = os.environ.get("MINIO_ROOT_USER", "minioadmin")
 MINIO_ROOT_PASSWORD = os.environ.get("MINIO_ROOT_PASSWORD", "changeme")
 MINIO_BUCKET = os.environ.get("MINIO_BUCKET", "medimaging")
 
-DEFAULT_DICOM = ROOT_DIR / "services/anonymizer/output/anonymized_CT_small.dcm"
 DEFAULT_PNG = ROOT_DIR / "services/preview-generator/output/preview_CT_small.png"
+
+
+def infer_dicom_path(png_path):
+    name = png_path.stem
+    if name.startswith("preview_"):
+        name = name[len("preview_"):]
+    return ROOT_DIR / "services/anonymizer/output" / f"anonymized_{name}.dcm"
 
 
 def get_client():
@@ -50,7 +56,7 @@ def build_object_name(dicom_path, png_path):
 
 def main():
     png_path = Path(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_PNG
-    dicom_path = DEFAULT_DICOM
+    dicom_path = Path(sys.argv[2]) if len(sys.argv) > 2 else infer_dicom_path(png_path)
 
     if not png_path.exists():
         print(f"No preview PNG found at {png_path}")

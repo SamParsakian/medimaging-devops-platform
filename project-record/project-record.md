@@ -324,3 +324,37 @@ Screenshots:
 ![Preview PNG opened locally](images/step-6-preview-local.png)
 
 ![MinIO console showing the preview object](images/step-6-minio-preview-object.png)
+
+## Step 6B - Better Visual DICOM Sample
+
+In this step, a bigger, clearer public DICOM sample replaced `CT_small.dcm` as input to the preview pipeline. `CT_small.dcm` is only 128x128, so its preview came out tiny.
+
+A second sample was added: `examples_overlay.dcm`, also one of pydicom's bundled test files. It's a cropped copy of a real Siemens abdominal MR slice, originally from the GDCM project (BSD-style license), 300x484 pixels. Source and license details are in `docs/sample-data.md`.
+
+A download script was added:
+
+```text
+scripts/download-better-dicom-sample.sh
+```
+
+It downloads the file into `sample-data/downloads/` (git-ignored) and does not touch Orthanc.
+
+The raw file's `InstitutionName` tag was `AKH - WIEN`, a real hospital name. Running the Step 4 anonymizer on it replaced this with `Demo Institution`, the same as it does for `CT_small.dcm`.
+
+`services/preview-generator/upload_preview.py` was updated to work out the matching anonymized DICOM file from whatever PNG path it's given, instead of a hardcoded filename, so the same script works for both samples.
+
+Commands used:
+
+```bash
+docker compose ps
+./scripts/download-better-dicom-sample.sh
+./services/anonymizer/.venv/bin/python services/anonymizer/anonymize.py sample-data/downloads/examples_overlay.dcm
+./services/preview-generator/.venv/bin/python services/preview-generator/generate_preview.py services/anonymizer/output/anonymized_examples_overlay.dcm
+./services/preview-generator/.venv/bin/python services/preview-generator/upload_preview.py services/preview-generator/output/preview_examples_overlay.png
+```
+
+The new PNG (300x484) shows a real anatomical image - liver, kidneys, spine, and aorta are all visible. Listing the bucket confirmed all three processed objects sit side by side: the Step 5 anonymized DICOM, the Step 6 CT preview, and the new MR preview.
+
+Screenshot:
+
+![Better DICOM preview showing visible anatomy](images/step-6b-better-dicom-preview.png)
