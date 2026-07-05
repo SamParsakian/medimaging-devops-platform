@@ -358,3 +358,83 @@ The new PNG (300x484) shows a real anatomical image - liver, kidneys, spine, and
 Screenshot:
 
 ![Better DICOM preview showing visible anatomy](images/step-6b-better-dicom-preview.png)
+
+## Step 7 - FastAPI Study API
+
+In this step, a small read-only API was added in front of the `studies` table.
+
+A new service was added under:
+
+```text
+services/api/
+```
+
+It's a FastAPI app (`main.py`, `Dockerfile`, `requirements.txt`). It connects to PostgreSQL using the `postgres` service name, the same pattern the other containers already use.
+
+It was added to `docker-compose.yml` as a fourth service:
+
+```yaml
+api:
+  build:
+    context: ./services/api
+  container_name: api
+  restart: unless-stopped
+  ports:
+    - "${API_PORT:-8000}:8000"
+  environment:
+    POSTGRES_HOST: postgres
+    POSTGRES_PORT: 5432
+    POSTGRES_DB: ${POSTGRES_DB}
+    POSTGRES_USER: ${POSTGRES_USER}
+    POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+  depends_on:
+    postgres:
+      condition: service_healthy
+```
+
+Four endpoints:
+
+```text
+GET /health
+GET /studies
+GET /studies/{orthanc_study_id}
+GET /studies/{orthanc_study_id}/preview-info
+```
+
+`preview-info` needed somewhere to read the MinIO object path from, so a `preview_object_path` column was added to the `studies` table:
+
+```sql
+ALTER TABLE studies ADD COLUMN IF NOT EXISTS preview_object_path TEXT;
+```
+
+This was run directly against the live database, and also added to `infra/postgres/init.sql` for fresh setups.
+
+A small script fills that column in:
+
+```text
+services/metadata-extractor/set_preview_path.py
+```
+
+It takes an optional study UID and object path, and updates the matching row. No auth, no RBAC, no dashboard, no AI were added, per the task.
+
+Commands used:
+
+```bash
+docker exec postgres psql -U medimaging -d medimaging -c "ALTER TABLE studies ADD COLUMN IF NOT EXISTS preview_object_path TEXT;"
+./services/metadata-extractor/.venv/bin/python services/metadata-extractor/set_preview_path.py
+docker compose up -d --build api
+curl http://localhost:8000/health
+curl http://localhost:8000/studies
+curl http://localhost:8000/studies/{orthanc_study_id}
+curl http://localhost:8000/studies/{orthanc_study_id}/preview-info
+```
+
+The API was checked manually through the browser: Swagger UI lists all four endpoints, `/studies` shows the real demo study with its `preview_object_path`, and `/studies/{id}/preview-info` shows that same path with `"available": true`. A bad study ID was also tried and correctly returned a 404. The results are shown in the screenshots below.
+
+Screenshots:
+
+![Swagger UI listing all endpoints](images/step-7-swagger-ui.png)
+
+![GET /studies response](images/step-7-studies-response.png)
+
+![GET /studies/{id}/preview-info response](images/step-7-preview-info-response.png)
