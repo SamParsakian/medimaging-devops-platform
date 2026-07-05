@@ -602,3 +602,75 @@ Screenshots:
 ![GET /audit-events response in the browser, matching the table](images/step-9-audit-events-response.png)
 
 ![Dashboard's Recent Audit Events table at the bottom of the page](images/step-9-dashboard-audit.png)
+
+## Step 10 - Basic API Key Security
+
+In this step, a simple API key was added in front of the API and dashboard.
+
+The key comes from an environment variable that was already sitting unused in `.env.example` since Step 7:
+
+```text
+API_SECRET_KEY=changeme
+```
+
+It's passed into the `api` container in `docker-compose.yml`:
+
+```yaml
+API_SECRET_KEY: ${API_SECRET_KEY}
+```
+
+A single middleware checks every request:
+
+```python
+@app.middleware("http")
+async def require_api_key(request: Request, call_next):
+    if request.url.path in PUBLIC_PATHS:
+        return await call_next(request)
+
+    provided_key = request.headers.get("X-API-Key") or request.query_params.get("api_key")
+
+    if not provided_key:
+        return JSONResponse(status_code=401, content={"detail": "Missing API key"})
+    if provided_key != API_SECRET_KEY:
+        return JSONResponse(status_code=403, content={"detail": "Invalid API key"})
+
+    return await call_next(request)
+```
+
+`PUBLIC_PATHS` is `/health`, `/docs`, `/openapi.json`, and `/redoc` - everything else, including `/studies`, `/audit-events`, and `/dashboard`, needs the key. The key can be sent as an `X-API-Key` header or an `api_key` query parameter. The query parameter exists because a plain `<img>` tag (used for the preview image) can't send a custom header.
+
+The dashboard's own JavaScript needed a small change to keep working under this. It reads the key once from its own URL and attaches it to every API call it makes after that:
+
+```javascript
+const apiKey = new URLSearchParams(window.location.search).get("api_key") || "";
+
+function apiFetch(url) {
+  return fetch(url, { headers: { "X-API-Key": apiKey } });
+}
+```
+
+So opening the dashboard now means visiting `/dashboard/?api_key=...` once instead of a plain URL.
+
+One real problem showed up while checking a screenshot: the page loaded but stayed stuck on "Loading studies..." with no styling at all. The `<link href="style.css">` and `<script src="app.js">` tags were separate browser requests, and a browser does not carry a page's own query string over to those sub-resource requests - so `style.css` and `app.js` were hitting the API key check with no key and getting `401`, meaning the dashboard's own script never ran. The fix was to inline the CSS and JS directly into `index.html`, so the whole dashboard is one single request - the same request that already carries `?api_key=...` in its URL.
+
+Commands used:
+
+```bash
+docker compose up -d --build api
+curl http://localhost:8000/health
+curl http://localhost:8000/studies
+curl -H "X-API-Key: wrong-key" http://localhost:8000/studies
+curl -H "X-API-Key: changeme" http://localhost:8000/studies
+curl http://localhost:8000/dashboard/
+curl "http://localhost:8000/dashboard/?api_key=changeme"
+```
+
+This was checked manually: `/health` still returns 200 with no key. `/studies` and `/audit-events` return `401 Missing API key` with no key, `403 Invalid API key` with the wrong key, and the real data with the right key. `/dashboard/` behaves the same way, and works normally once the key is in the URL. Checking `audit_events` afterward showed the same rows as before - rejected requests never reach the route, so only real, authenticated reads get logged, which is exactly what an audit trail is supposed to show. The results are shown in the screenshots below.
+
+Screenshots:
+
+![Browser request to /studies with no key, returning 401 Missing API key](images/step-10-blocked-no-key.png)
+
+![Terminal curl to /studies with the correct X-API-Key header, returning real data](images/step-10-authorized-with-key.png)
+
+![Dashboard fully styled and working at /dashboard/?api_key=changeme, studies and audit events both loaded](images/step-10-dashboard-with-key.png)

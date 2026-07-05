@@ -75,6 +75,7 @@ services:
       MINIO_ROOT_USER: ${MINIO_ROOT_USER}
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
       MINIO_BUCKET: ${MINIO_BUCKET}
+      API_SECRET_KEY: ${API_SECRET_KEY}
     depends_on:
       postgres:
         condition: service_healthy
