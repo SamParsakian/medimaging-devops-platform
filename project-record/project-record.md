@@ -1065,3 +1065,63 @@ To prove an alert actually fires and not just that it's defined, the `api` conta
 The `api` container was started again right after, and both Prometheus targets returned to a normal `up` state.
 
 No Alertmanager, and no email or Slack notifications, were added in this step - an alert firing is only visible by looking at Prometheus's own Rules and Alerts pages, which is enough for this stack for now.
+
+## Step 16 - Operations Runbook
+
+In this step, a new `docs/runbook.md` was written: a checklist for what to do when something on the stack stops working, instead of having to remember it or dig back through every earlier step's notes.
+
+The other docs in this project (`docs/local-stack.md`, `docs/backup-restore.md`) explain how each piece works and why. The runbook is a different kind of document on purpose: short, scannable, and written for the moment something is actually broken, when nobody wants to read a paragraph of background first. Each entry follows the same shape:
+
+```text
+Notice:   what you'd actually see when this problem happens
+Check:    the exact commands to run
+Fix:      what usually solves it
+```
+
+A "Where to check things" table sits near the top, since knowing which tool to open is half the problem when something's wrong:
+
+```text
+Dashboard        - study list and previews
+Swagger UI       - the API's shape, at /docs
+Prometheus       - metrics, targets, and alerts
+Grafana          - the dashboard built in Step 14
+docker compose logs - every container's own output
+PostgreSQL       - the studies and audit_events tables directly
+MinIO console    - uploaded files and previews directly
+```
+
+Thirteen incidents are covered in total:
+
+```text
+API is down
+Orthanc is down
+PostgreSQL is down
+MinIO is down
+Prometheus/Grafana is down
+DICOM upload fails
+Metadata extraction fails
+Anonymization fails
+Preview generation fails
+MinIO upload fails
+Backup fails
+Restore check fails
+Alert is firing
+```
+
+The "Alert is firing" entry ties directly back into Step 15: since there's no Alertmanager or notifications, the only place a firing alert ever shows up is Prometheus's own Alerts page, so that entry just maps each of the four alert names back to whichever incident section actually explains it.
+
+No new services or code were added in this step - it's documentation only. The finished file was opened as rendered markdown, to check it actually reads cleanly and not just that the raw text looked right in an editor:
+
+![docs/runbook.md rendered as markdown, showing the intro, the commands block, and the Where to check things table](images/step-16-runbook-preview.png)
+
+Every command in the runbook was also run against the real stack before being written down, not just written from memory of what the flags should be. The basic health-check sequence from the top of the file was run for real, with its actual output:
+
+```bash
+docker compose ps
+docker exec postgres pg_isready -U medimaging -d medimaging
+docker exec minio mc ready local
+curl http://localhost:8000/health
+```
+
+![Terminal output of the runbook's basic check commands: docker compose ps listing all six healthy containers, pg_isready accepting connections, and MinIO's cluster reporting ready](images/step-16-incident-check-flow.png)
+
