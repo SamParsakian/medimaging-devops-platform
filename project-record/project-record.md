@@ -769,3 +769,134 @@ Screenshots:
 ![Dashboard Study Detail panel showing Preview Status as failed, with the error message shown underneath](images/step-12-dashboard-failure.png)
 
 ![GET /studies/{id} response showing preview_status: failed and the last_error text](images/step-12-api-failure-response.png)
+
+## Step 13 - Structured Logging
+
+In this step, the API and every pipeline script started printing their logs as one JSON object per line, instead of plain sentences.
+
+Plain print statements are fine to read while watching one script run by hand, but they cannot be searched, filtered, or fed into a monitoring tool later. A JSON line with the same fields on every event is worth setting up now, even before any log collection tool is actually in place.
+
+Every service uses the same small helper function, repeated in each script rather than shared, matching how `update_pipeline_status` was already handled in Step 12:
+
+```python
+def log_event(action, status="success", study_id=None, error=None, level="INFO", **extra):
+    entry = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "level": level,
+        "service": SERVICE_NAME,
+        "action": action,
+        "study_id": study_id,
+        "status": status,
+        "error": error,
+    }
+    entry.update(extra)
+    print(json.dumps(entry), flush=True)
+```
+
+Every log line has the same core fields:
+
+```text
+timestamp
+level
+service
+action
+study_id
+status
+error
+```
+
+Six services now write these logs:
+
+```text
+api (services/api/main.py)
+metadata-extractor (services/metadata-extractor/extract.py)
+anonymizer (services/anonymizer/anonymize.py)
+preview-generator (services/preview-generator/generate_preview.py and upload_preview.py)
+minio-uploader (services/minio-uploader/upload.py)
+backup and restore (scripts/backup/backup.sh and restore.sh)
+```
+
+In the API, one middleware function already wrapped every request to check the API key, so it was extended to log an `http_request` event for every request, including its method, path, response status code, and how long it took:
+
+```python
+response = await call_next(request)
+duration_ms = round((time.monotonic() - started) * 1000, 1)
+log_event(
+    "http_request",
+    status="success" if response.status_code < 400 else "error",
+    level="INFO" if response.status_code < 400 else "ERROR",
+    method=method, path=path, status_code=response.status_code, duration_ms=duration_ms,
+)
+```
+
+Docker itself calls `GET /health` automatically every 30 seconds to check that the container is still alive. That is not a real event worth logging forever, so the middleware skips it entirely instead of writing a JSON line for every check:
+
+```python
+if request.url.path == "/health":
+    return await call_next(request)
+```
+
+Study access, preview access, and audit events all already ran through one function, `log_audit_event`, from Step 9. That function now also prints a structured log line every time it writes an audit row, so all three of those are covered by the same one line of code:
+
+```python
+log_event(action, status=status, study_id=study_id, user_id=DEMO_USER_ID, ip_address=ip_address)
+```
+
+The backup and restore scripts are plain bash, so they use a small shell function instead of Python, printing the same JSON shape by hand with `printf`:
+
+```bash
+log_event() {
+  local action="$1" status="$2" error="${3:-}"
+  local level="INFO"
+  [ "$status" = "failed" ] && level="ERROR"
+  local timestamp
+  timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  printf '{"timestamp":"%s","level":"%s","service":"backup","action":"%s","study_id":null,"status":"%s","error":null}\n' \
+    "$timestamp" "$level" "$action" "$status"
+}
+```
+
+Both scripts log a `started` event at the top and a `done` event at the end, and a `trap` catches any command that fails partway through and logs a `failed` event with the command and line number before the script exits.
+
+No log collection tool was added in this step. There is no Loki and no Grafana yet, just readable JSON lines printed to stdout.
+
+To check this for real, the API was exercised by hand with a mix of requests: a request with no API key (401), a request with the wrong key (403), a request with the correct key (200), a lookup of a real study, and a lookup of a study ID that does not exist (404). Every one of those showed up as a structured line in `docker compose logs api`, with the right status and, for the 404, the `not_found` status against the real study lookup action. Each pipeline script was also run by hand once against the real demo study, and each one printed a clean `started` line followed by a `success` line.
+
+Failure logging was checked the same way Step 12 checked its own failure handling: a copy of the anonymized CT file was cut short partway through its image data, keeping the header (and the real study ID) intact but breaking the actual pixel data. Running the preview generator against that cut-short copy printed a structured line with `"status": "failed"`, `"level": "ERROR"`, and pydicom's real error message describing exactly what was wrong, and the same failure was reflected in the `studies` table's `preview_status` column, same as in Step 12. Afterward, the preview generator was run again against the real, uncorrupted file, which put everything back to `done`.
+
+The exact commands used:
+
+```bash
+source .env
+STUDY_ID="8a8cf898-ca27c490-d0c7058c-929d0581-2bbf104d"
+
+curl -s -o /dev/null http://localhost:8000/studies
+curl -s -o /dev/null -H "X-API-Key: wrong" http://localhost:8000/studies
+curl -s -o /dev/null -H "X-API-Key: $API_SECRET_KEY" http://localhost:8000/studies
+curl -s -o /dev/null -H "X-API-Key: $API_SECRET_KEY" "http://localhost:8000/studies/$STUDY_ID"
+curl -s -o /dev/null -H "X-API-Key: $API_SECRET_KEY" http://localhost:8000/studies/does-not-exist
+
+docker compose logs api --tail 20
+```
+
+![docker compose logs api showing structured JSON lines for a missing key (401), a wrong key (403), a successful study list and lookup, and a lookup of a study that does not exist (404)](images/step-13-api-logs.png)
+
+The same five checks work directly in a browser too, instead of a terminal, since the API has accepted the key as an `?api_key=` query parameter since Step 10 (that was originally added for the dashboard's preview image, which can't send a custom header). Typing each URL straight into the address bar gives the same responses a curl request would get, just rendered by the browser instead of printed to a terminal:
+
+![Browser showing {"detail":"Missing API key"} at http://localhost:8000/studies with no key](images/step-13-browser-missing-key.png)
+
+![Browser showing {"detail":"Invalid API key"} at http://localhost:8000/studies?api_key=wrong](images/step-13-browser-wrong-key.png)
+
+![Browser showing the full study list at http://localhost:8000/studies?api_key=changeme](images/step-13-browser-studies-list.png)
+
+![Browser showing one study's details at http://localhost:8000/studies/8a8cf898-ca27c490-d0c7058c-929d0581-2bbf104d?api_key=changeme](images/step-13-browser-study-detail.png)
+
+![Browser showing {"detail":"Study not found"} at http://localhost:8000/studies/does-not-exist?api_key=changeme](images/step-13-browser-not-found.png)
+
+One pipeline script was also run directly in the terminal, without Docker Compose, since it still runs manually on the host:
+
+```bash
+./services/metadata-extractor/.venv/bin/python services/metadata-extractor/extract.py
+```
+
+![Terminal output of the metadata extractor showing its three structured JSON log lines: extract_run started, one extract_study success, extract_run done](images/step-13-pipeline-logs.png)

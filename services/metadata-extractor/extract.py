@@ -4,8 +4,9 @@ metadata in the PostgreSQL `studies` table. Meant to be run manually
 for now - no background queue, no API, no scheduling.
 """
 
+import json
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 
 import psycopg2
 import requests
@@ -13,6 +14,24 @@ from dotenv import load_dotenv
 
 ROOT_DIR = os.path.join(os.path.dirname(__file__), "..", "..")
 load_dotenv(os.path.join(ROOT_DIR, ".env"))
+
+SERVICE_NAME = "metadata-extractor"
+
+
+def log_event(action, status="success", study_id=None, error=None, level="INFO", **extra):
+    """Prints one JSON line per event, so the run's structured logs show
+    up in the terminal this script is run from. No Loki/Grafana yet."""
+    entry = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "level": level,
+        "service": SERVICE_NAME,
+        "action": action,
+        "study_id": study_id,
+        "status": status,
+        "error": error,
+    }
+    entry.update(extra)
+    print(json.dumps(entry), flush=True)
 
 ORTHANC_HOST = os.environ.get("ORTHANC_HOST", "localhost")
 ORTHANC_HTTP_PORT = os.environ.get("ORTHANC_HTTP_PORT", "8042")
@@ -108,7 +127,7 @@ def collect_study_metadata(orthanc_study_id):
 
 def main():
     study_ids = get_json("/studies")
-    print(f"Found {len(study_ids)} study(ies) in Orthanc.")
+    log_event("extract_run", status="started", study_count=len(study_ids))
 
     conn = psycopg2.connect(
         host=POSTGRES_HOST,
@@ -124,17 +143,26 @@ def main():
                     try:
                         metadata = collect_study_metadata(orthanc_study_id)
                         cur.execute(UPSERT_SQL, metadata)
-                        print(
-                            f"Stored study {orthanc_study_id}: "
-                            f"{metadata['patient_name']} / {metadata['study_description']}"
+                        log_event(
+                            "extract_study",
+                            status="success",
+                            study_id=metadata["study_instance_uid"],
+                            orthanc_study_id=orthanc_study_id,
+                            study_description=metadata["study_description"],
                         )
                     except Exception as exc:
-                        print(f"Failed to process study {orthanc_study_id}: {exc}")
+                        log_event(
+                            "extract_study",
+                            status="failed",
+                            level="ERROR",
+                            orthanc_study_id=orthanc_study_id,
+                            error=str(exc),
+                        )
                         cur.execute(FAIL_UPDATE_SQL, {"orthanc_study_id": orthanc_study_id, "error": str(exc)})
     finally:
         conn.close()
 
-    print("Done.")
+    log_event("extract_run", status="done")
 
 
 if __name__ == "__main__":

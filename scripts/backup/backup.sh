@@ -5,6 +5,25 @@
 # production backup strategy.
 set -euo pipefail
 
+# Prints one JSON line per event, so the run's structured logs show up in
+# the terminal this script is run from. No Loki/Grafana yet.
+log_event() {
+  local action="$1" status="$2" error="${3:-}"
+  local level="INFO"
+  [ "$status" = "failed" ] && level="ERROR"
+  local timestamp
+  timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  if [ -n "$error" ]; then
+    printf '{"timestamp":"%s","level":"%s","service":"backup","action":"%s","study_id":null,"status":"%s","error":"%s"}\n' \
+      "$timestamp" "$level" "$action" "$status" "$error"
+  else
+    printf '{"timestamp":"%s","level":"%s","service":"backup","action":"%s","study_id":null,"status":"%s","error":null}\n' \
+      "$timestamp" "$level" "$action" "$status"
+  fi
+}
+
+trap 'log_event "backup_run" "failed" "command failed at line $LINENO: $BASH_COMMAND"' ERR
+
 cd "$(dirname "$0")/../.."
 
 if [ -f .env ]; then
@@ -22,6 +41,8 @@ MINIO_BUCKET="${MINIO_BUCKET:-medimaging}"
 TIMESTAMP="$(date +%Y%m%d-%H%M%S)"
 BACKUP_DIR="scripts/backup/output/${TIMESTAMP}"
 mkdir -p "$BACKUP_DIR"
+
+log_event "backup_run" "started"
 
 echo "Backing up PostgreSQL..."
 docker exec postgres pg_dump -U "$POSTGRES_USER" --clean --if-exists "$POSTGRES_DB" > "$BACKUP_DIR/postgres.sql"
@@ -41,3 +62,5 @@ docker exec orthanc rm -f /tmp/orthanc-storage.tar.gz
 echo
 echo "Backup complete: $BACKUP_DIR"
 du -sh "$BACKUP_DIR"/* 2>/dev/null
+
+log_event "backup_run" "done"

@@ -5,9 +5,11 @@ result to a local, git-ignored output folder. Run manually, one file
 at a time - no batch processing, no queue.
 """
 
+import json
 import os
 import sys
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 
 import psycopg2
@@ -18,6 +20,24 @@ from rules import ANONYMIZATION_RULES
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 load_dotenv(ROOT_DIR / ".env")
+
+SERVICE_NAME = "anonymizer"
+
+
+def log_event(action, status="success", study_id=None, error=None, level="INFO", **extra):
+    """Prints one JSON line per event, so the run's structured logs show
+    up in the terminal this script is run from. No Loki/Grafana yet."""
+    entry = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "level": level,
+        "service": SERVICE_NAME,
+        "action": action,
+        "study_id": study_id,
+        "status": status,
+        "error": error,
+    }
+    entry.update(extra)
+    print(json.dumps(entry), flush=True)
 
 POSTGRES_HOST = os.environ.get("POSTGRES_HOST", "localhost")
 POSTGRES_PORT = os.environ.get("POSTGRES_PORT", "5432")
@@ -76,6 +96,7 @@ def print_tags(label, dataset):
 def anonymize(input_path, output_path):
     dataset = pydicom.dcmread(input_path)
     study_uid = dataset.StudyInstanceUID
+    log_event("anonymize_file", status="started", study_id=study_uid, input_path=str(input_path))
 
     try:
         print_tags("Before:", dataset)
@@ -92,9 +113,14 @@ def anonymize(input_path, output_path):
         print(f"\nSaved anonymized file to {output_path}")
     except Exception as exc:
         update_pipeline_status(study_uid, "anonymization_status", "failed", str(exc))
+        log_event(
+            "anonymize_file", status="failed", level="ERROR",
+            study_id=study_uid, error=str(exc),
+        )
         raise
 
     update_pipeline_status(study_uid, "anonymization_status", "done")
+    log_event("anonymize_file", status="success", study_id=study_uid, output_path=str(output_path))
     return study_uid
 
 

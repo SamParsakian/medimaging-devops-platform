@@ -7,7 +7,10 @@ a basic audit trail of who looked at what. No real auth yet - one
 fixed demo user, protected by a single shared API key.
 """
 
+import json
 import os
+import time
+from datetime import datetime, timezone
 
 import psycopg2
 from fastapi import FastAPI, HTTPException, Request
@@ -15,6 +18,25 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from minio import Minio
 from minio.error import S3Error
+
+SERVICE_NAME = "api"
+
+
+def log_event(action, status="success", study_id=None, error=None, level="INFO", **extra):
+    """Prints one JSON line per event, so `docker compose logs api` shows
+    structured logs. No Loki/Grafana yet - stdout is the whole pipeline."""
+    entry = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "level": level,
+        "service": SERVICE_NAME,
+        "action": action,
+        "study_id": study_id,
+        "status": status,
+        "error": error,
+    }
+    entry.update(extra)
+    print(json.dumps(entry), flush=True)
+
 
 POSTGRES_HOST = os.environ.get("POSTGRES_HOST", "localhost")
 POSTGRES_PORT = os.environ.get("POSTGRES_PORT", "5432")
@@ -47,17 +69,41 @@ app = FastAPI(title="Medical Imaging Study API")
 
 @app.middleware("http")
 async def require_api_key(request: Request, call_next):
-    if request.url.path in PUBLIC_PATHS:
+    # Docker's own healthcheck hits this path every 30 seconds - it's a
+    # liveness ping, not a real event, so it's not worth logging.
+    if request.url.path == "/health":
         return await call_next(request)
 
-    provided_key = request.headers.get("X-API-Key") or request.query_params.get("api_key")
+    started = time.monotonic()
+    method = request.method
+    path = request.url.path
 
-    if not provided_key:
-        return JSONResponse(status_code=401, content={"detail": "Missing API key"})
-    if provided_key != API_SECRET_KEY:
-        return JSONResponse(status_code=403, content={"detail": "Invalid API key"})
+    if path not in PUBLIC_PATHS:
+        provided_key = request.headers.get("X-API-Key") or request.query_params.get("api_key")
 
-    return await call_next(request)
+        if not provided_key:
+            log_event(
+                "http_request", status="unauthorized", level="WARNING",
+                method=method, path=path, status_code=401,
+            )
+            return JSONResponse(status_code=401, content={"detail": "Missing API key"})
+        if provided_key != API_SECRET_KEY:
+            log_event(
+                "http_request", status="forbidden", level="WARNING",
+                method=method, path=path, status_code=403,
+            )
+            return JSONResponse(status_code=403, content={"detail": "Invalid API key"})
+
+    response = await call_next(request)
+    duration_ms = round((time.monotonic() - started) * 1000, 1)
+    log_event(
+        "http_request",
+        status="success" if response.status_code < 400 else "error",
+        level="INFO" if response.status_code < 400 else "ERROR",
+        method=method, path=path, status_code=response.status_code, duration_ms=duration_ms,
+    )
+    return response
+
 
 STUDY_COLUMNS = (
     "orthanc_study_id, study_instance_uid, patient_id, modality, "
@@ -134,6 +180,9 @@ def log_audit_event(request: Request, action: str, study_id, status: str):
                 )
     finally:
         conn.close()
+    # Covers study access, preview access, and audit events in one place,
+    # since every one of those endpoints already calls this function.
+    log_event(action, status=status, study_id=study_id, user_id=DEMO_USER_ID, ip_address=ip_address)
 
 
 @app.get("/health")

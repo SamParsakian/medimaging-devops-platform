@@ -4,8 +4,10 @@ object. Run manually, after generate_preview.py. The study UID comes
 from the source anonymized DICOM file, not the PNG itself.
 """
 
+import json
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import psycopg2
@@ -15,6 +17,24 @@ from minio import Minio
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 load_dotenv(ROOT_DIR / ".env")
+
+SERVICE_NAME = "preview-generator"
+
+
+def log_event(action, status="success", study_id=None, error=None, level="INFO", **extra):
+    """Prints one JSON line per event, so the run's structured logs show
+    up in the terminal this script is run from. No Loki/Grafana yet."""
+    entry = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "level": level,
+        "service": SERVICE_NAME,
+        "action": action,
+        "study_id": study_id,
+        "status": status,
+        "error": error,
+    }
+    entry.update(extra)
+    print(json.dumps(entry), flush=True)
 
 MINIO_HOST = os.environ.get("MINIO_HOST", "localhost")
 MINIO_PORT = os.environ.get("MINIO_PORT", "9000")
@@ -94,6 +114,7 @@ def main():
 
     study_uid = pydicom.dcmread(dicom_path).StudyInstanceUID
     object_name = f"processed/previews/{study_uid}/{png_path.name}"
+    log_event("upload_preview", status="started", study_id=study_uid, object_name=object_name)
 
     try:
         client = get_client()
@@ -101,10 +122,15 @@ def main():
         client.fput_object(MINIO_BUCKET, object_name, str(png_path))
     except Exception as exc:
         update_pipeline_status(study_uid, "upload_status", "failed", str(exc))
+        log_event(
+            "upload_preview", status="failed", level="ERROR",
+            study_id=study_uid, error=str(exc),
+        )
         print(f"ERROR: could not upload {png_path}: {exc}")
         sys.exit(1)
 
     update_pipeline_status(study_uid, "upload_status", "done")
+    log_event("upload_preview", status="success", study_id=study_uid, object_name=object_name)
     print(f"Uploaded {png_path} to {MINIO_BUCKET}/{object_name}")
 
 
