@@ -5,8 +5,10 @@ image isn't just black or blown out, and writes a PNG to a local,
 git-ignored output folder. Run manually, one file at a time.
 """
 
+import json
 import os
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
@@ -17,6 +19,24 @@ from PIL import Image
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
 load_dotenv(ROOT_DIR / ".env")
+
+SERVICE_NAME = "preview-generator"
+
+
+def log_event(action, status="success", study_id=None, error=None, level="INFO", **extra):
+    """Prints one JSON line per event, so the run's structured logs show
+    up in the terminal this script is run from. No Loki/Grafana yet."""
+    entry = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "level": level,
+        "service": SERVICE_NAME,
+        "action": action,
+        "study_id": study_id,
+        "status": status,
+        "error": error,
+    }
+    entry.update(extra)
+    print(json.dumps(entry), flush=True)
 
 POSTGRES_HOST = os.environ.get("POSTGRES_HOST", "localhost")
 POSTGRES_PORT = os.environ.get("POSTGRES_PORT", "5432")
@@ -91,6 +111,7 @@ def to_8bit_pixels(dataset):
 def generate_preview(input_path, output_path):
     dataset = pydicom.dcmread(input_path)
     study_uid = dataset.StudyInstanceUID
+    log_event("generate_preview", status="started", study_id=study_uid, input_path=str(input_path))
 
     try:
         pixels = to_8bit_pixels(dataset)
@@ -101,9 +122,14 @@ def generate_preview(input_path, output_path):
         print(f"Saved preview PNG to {output_path}")
     except Exception as exc:
         update_pipeline_status(study_uid, "preview_status", "failed", str(exc))
+        log_event(
+            "generate_preview", status="failed", level="ERROR",
+            study_id=study_uid, error=str(exc),
+        )
         raise
 
     update_pipeline_status(study_uid, "preview_status", "done")
+    log_event("generate_preview", status="success", study_id=study_uid, output_path=str(output_path))
     return study_uid
 
 

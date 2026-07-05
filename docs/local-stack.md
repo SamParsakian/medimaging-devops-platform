@@ -176,3 +176,31 @@ Each status is `pending`, `done`, or `failed`. These fields come back from `GET 
 docker exec postgres psql -U medimaging -d medimaging -c "SELECT orthanc_study_id, anonymization_status, preview_status, upload_status, last_error FROM studies;"
 curl -H "X-API-Key: changeme" http://localhost:8000/studies/8a8cf898-ca27c490-d0c7058c-929d0581-2bbf104d
 ```
+
+## Structured logging
+
+The API and every pipeline script (metadata extractor, anonymizer, preview generator, preview uploader, MinIO uploader) print one JSON object per line for each event, instead of (or alongside) plain text. Each line has the same core fields:
+
+```text
+timestamp   - UTC, ISO 8601
+level       - INFO or ERROR (WARNING for a rejected API key)
+service     - api, metadata-extractor, anonymizer, preview-generator, minio-uploader, backup, restore
+action      - what happened, e.g. http_request, view_study, extract_study, anonymize_file
+study_id    - the study this event is about, or null if not applicable
+status      - success, failed, not_found, started, done, unauthorized, forbidden, aborted
+error       - the error message if status is failed, otherwise null
+```
+
+Extra fields are added per action where useful (`method`/`path`/`status_code`/`duration_ms` for API requests, `input_path`/`output_path`/`object_name` for pipeline steps). This is plain JSON on stdout - no Loki, no Grafana, no log shipping yet. It's readable directly through Docker Compose for the API service:
+
+```bash
+docker compose logs api
+```
+
+and directly in the terminal for the pipeline scripts, since those still run manually on the host:
+
+```bash
+./services/metadata-extractor/.venv/bin/python services/metadata-extractor/extract.py
+```
+
+`scripts/backup/backup.sh` and `scripts/backup/restore.sh` print the same kind of JSON line at start, end, and on failure (`backup_run`/`restore_run` actions), using a small shell function instead of Python.
