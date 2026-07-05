@@ -31,11 +31,11 @@ UPSERT_SQL = """
 INSERT INTO studies (
     orthanc_study_id, study_instance_uid, series_instance_uid,
     patient_id, patient_name, modality, study_date, study_description,
-    series_count, instance_count, processing_status, updated_at
+    series_count, instance_count, processing_status, last_error, updated_at
 ) VALUES (
     %(orthanc_study_id)s, %(study_instance_uid)s, %(series_instance_uid)s,
     %(patient_id)s, %(patient_name)s, %(modality)s, %(study_date)s, %(study_description)s,
-    %(series_count)s, %(instance_count)s, 'done', now()
+    %(series_count)s, %(instance_count)s, 'done', NULL, now()
 )
 ON CONFLICT (orthanc_study_id) DO UPDATE SET
     study_instance_uid = EXCLUDED.study_instance_uid,
@@ -48,7 +48,14 @@ ON CONFLICT (orthanc_study_id) DO UPDATE SET
     series_count = EXCLUDED.series_count,
     instance_count = EXCLUDED.instance_count,
     processing_status = 'done',
+    last_error = NULL,
     updated_at = now();
+"""
+
+FAIL_UPDATE_SQL = """
+UPDATE studies
+SET processing_status = 'failed', last_error = %(error)s, updated_at = now()
+WHERE orthanc_study_id = %(orthanc_study_id)s;
 """
 
 
@@ -114,12 +121,16 @@ def main():
         with conn:
             with conn.cursor() as cur:
                 for orthanc_study_id in study_ids:
-                    metadata = collect_study_metadata(orthanc_study_id)
-                    cur.execute(UPSERT_SQL, metadata)
-                    print(
-                        f"Stored study {orthanc_study_id}: "
-                        f"{metadata['patient_name']} / {metadata['study_description']}"
-                    )
+                    try:
+                        metadata = collect_study_metadata(orthanc_study_id)
+                        cur.execute(UPSERT_SQL, metadata)
+                        print(
+                            f"Stored study {orthanc_study_id}: "
+                            f"{metadata['patient_name']} / {metadata['study_description']}"
+                        )
+                    except Exception as exc:
+                        print(f"Failed to process study {orthanc_study_id}: {exc}")
+                        cur.execute(FAIL_UPDATE_SQL, {"orthanc_study_id": orthanc_study_id, "error": str(exc)})
     finally:
         conn.close()
 

@@ -119,6 +119,20 @@
       color: #888;
     }
 
+    .badge.failed {
+      background: #fbe4e4;
+      color: #a3242a;
+    }
+
+    .badge.pending {
+      background: #fff6dd;
+      color: #8a6a00;
+    }
+
+    .error-text {
+      color: #a3242a;
+    }
+
     .audit-events {
       margin-top: 1.5rem;
     }
@@ -199,6 +213,11 @@
         : '<span class="badge unavailable">not available</span>';
     }
 
+    function statusBadge(status) {
+      const cls = status === "done" ? "available" : status === "failed" ? "failed" : "pending";
+      return `<span class="badge ${cls}">${status}</span>`;
+    }
+
     async function loadStudies() {
       const response = await apiFetch("/studies");
       const studies = await response.json();
@@ -211,7 +230,7 @@
           <td>${study.modality ?? ""}</td>
           <td>${study.study_date ?? ""}</td>
           <td>${study.patient_id ?? ""}</td>
-          <td>${study.processing_status}</td>
+          <td>${statusBadge(study.processing_status)}</td>
           <td>${previewBadge(study)}</td>
         `;
         row.addEventListener("click", () => loadStudyDetail(study.orthanc_study_id));
@@ -252,6 +271,10 @@
         ? `<img class="preview-image" src="${withApiKey(`/studies/${studyId}/preview-image`)}" alt="Study preview" />`
         : `<p class="placeholder">No preview available for this study.</p>`;
 
+      const errorRow = study.last_error
+        ? `<tr><th>Last Error</th><td class="error-text">${study.last_error}</td></tr>`
+        : "";
+
       detailSection.innerHTML = `
         <h2>Study Detail</h2>
         <table class="detail-table">
@@ -262,7 +285,11 @@
           <tr><th>Study Date</th><td>${study.study_date ?? ""}</td></tr>
           <tr><th>Study Description</th><td>${study.study_description ?? ""}</td></tr>
           <tr><th>Series / Instances</th><td>${study.series_count} / ${study.instance_count}</td></tr>
-          <tr><th>Processing Status</th><td>${study.processing_status}</td></tr>
+          <tr><th>Metadata Status</th><td>${statusBadge(study.processing_status)}</td></tr>
+          <tr><th>Anonymization Status</th><td>${statusBadge(study.anonymization_status)}</td></tr>
+          <tr><th>Preview Status</th><td>${statusBadge(study.preview_status)}</td></tr>
+          <tr><th>Upload Status</th><td>${statusBadge(study.upload_status)}</td></tr>
+          ${errorRow}
           <tr><th>MinIO Preview Path</th><td class="mono">${previewInfo.preview_object_path ?? "n/a"}</td></tr>
         </table>
         ${previewBlock}

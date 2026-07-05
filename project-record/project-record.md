@@ -719,3 +719,53 @@ Screenshots:
 ![Backup folder listing showing postgres.sql, minio/, and orthanc-storage.tar.gz](images/step-11-backup-files.png)
 
 ![Restore verification: audit_events count and both preview objects in MinIO](images/step-11-restore-verification.png)
+
+## Step 12 - Failure Handling and Status Tracking
+
+In this step, each stage of the imaging pipeline started reporting whether it actually worked, instead of just succeeding silently or crashing with no record of what happened.
+
+Four new columns were added to the `studies` table:
+
+```text
+anonymization_status
+preview_status
+upload_status
+last_error
+```
+
+The pipeline has four stages that already existed from earlier steps: metadata extraction, anonymization, preview generation, and MinIO upload. Each one already ran, but none of them wrote down whether they succeeded. Metadata extraction already had its own status column (`processing_status`, from Step 3), so the new columns cover the other three stages. Every status is one of `pending`, `done`, or `failed`. `last_error` holds the plain text of whatever went wrong, so a failure isn't just a blank status - there's a reason next to it.
+
+Each script updates its own column right after it finishes:
+
+```python
+def update_pipeline_status(study_uid, column, status, error=None):
+    conn = psycopg2.connect(...)
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"UPDATE studies SET {column} = %s, last_error = %s, updated_at = now() "
+                    "WHERE study_instance_uid = %s",
+                    (status, error, study_uid),
+                )
+    finally:
+        conn.close()
+```
+
+`extract.py` also got a small change: it used to process every study in one block, so one bad study could stop the whole run. Now each study is handled on its own, so a failure on one study just gets recorded and the script moves on to the next one instead of stopping.
+
+The new fields are visible through the API - `GET /studies` and `GET /studies/{id}` both return `anonymization_status`, `preview_status`, `upload_status`, and `last_error` alongside the existing fields. The dashboard's Study Detail panel shows all four stages as small colored labels (green for done, red for failed, yellow for pending), plus the error text when there is one.
+
+To check this for real, a copy of the anonymized CT file was deliberately cut short partway through - keeping the DICOM header (so the file still has a real, valid study ID) but losing part of the actual image data at the end. This is the same kind of damage a real DICOM file could end up with from an interrupted copy or a bad download. Running the preview generator against that cut-short copy failed cleanly instead of crashing:
+
+```bash
+./services/preview-generator/.venv/bin/python services/preview-generator/generate_preview.py services/anonymizer/output/anonymized_CT_small_corrupted.dcm
+```
+
+The script printed a clear error and stopped, and `preview_status` for that study was set to `failed` with the reason attached - pydicom's own message, saying the file had less image data than its header said it should. In plain terms: the file's header was promising more picture data than the file actually contained, which is exactly the kind of damage a cut-off file produces. That failure showed up immediately through both the API and the dashboard for the real study, which is the whole point of this step. Afterward, the preview generator was run again against the real, uncorrupted file, which set `preview_status` back to `done`.
+
+Screenshots:
+
+![Dashboard Study Detail panel showing Preview Status as failed, with the error message shown underneath](images/step-12-dashboard-failure.png)
+
+![GET /studies/{id} response showing preview_status: failed and the last_error text](images/step-12-api-failure-response.png)

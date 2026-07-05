@@ -157,3 +157,22 @@ The dashboard also shows the 50 most recent events in a table at the bottom of t
 ## Backup and restore
 
 `scripts/backup/backup.sh` and `scripts/backup/restore.sh` back up and restore PostgreSQL and MinIO (Orthanc's storage is documented separately since it needs a manual step). See `docs/backup-restore.md` for the full details.
+
+## Pipeline status tracking
+
+Every study row in `studies` now tracks whether each stage of the pipeline succeeded, not just metadata extraction:
+
+```text
+processing_status      - metadata extraction (from Orthanc)
+anonymization_status   - services/anonymizer/anonymize.py
+preview_status         - services/preview-generator/generate_preview.py
+upload_status          - services/minio-uploader/upload.py and upload_preview.py
+last_error             - the error message from whichever stage last failed, if any
+```
+
+Each status is `pending`, `done`, or `failed`. These fields come back from `GET /studies` and `GET /studies/{id}` alongside the existing fields, and the dashboard's Study Detail panel shows all four as colored labels, with the error text underneath if one exists.
+
+```bash
+docker exec postgres psql -U medimaging -d medimaging -c "SELECT orthanc_study_id, anonymization_status, preview_status, upload_status, last_error FROM studies;"
+curl -H "X-API-Key: changeme" http://localhost:8000/studies/8a8cf898-ca27c490-d0c7058c-929d0581-2bbf104d
+```
