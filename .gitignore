@@ -78,3 +78,6 @@ sample-data/downloads/
 
 # --- Generated anonymized DICOM output (not stored in repo) ---
 services/anonymizer/output/
+
+# --- Generated PNG preview output (not stored in repo) ---
+services/preview-generator/output/

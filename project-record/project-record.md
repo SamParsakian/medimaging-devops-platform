@@ -276,3 +276,51 @@ Running it a second time reused the existing bucket and just uploaded the file a
 Screenshot:
 
 ![MinIO console showing uploaded object](images/step-5-minio-object.png)
+
+## Step 6 - Visual DICOM Preview
+
+In this step, a PNG preview was generated from the anonymized DICOM file.
+
+A script was added under:
+
+```text
+services/preview-generator/generate_preview.py
+```
+
+It reads the anonymized DICOM file from Step 4, applies the DICOM rescale slope/intercept plus simple windowing (`WindowCenter`/`WindowWidth` if present, otherwise a min/max stretch), and saves an 8-bit grayscale PNG with Pillow. Raw CT pixel values aren't 0-255 by default, so without this step the image would just render as solid black or white.
+
+The PNG is written to:
+
+```text
+services/preview-generator/output/
+```
+
+This folder is git-ignored, same as the anonymizer's output folder.
+
+A second script uploads the PNG to MinIO:
+
+```text
+services/preview-generator/upload_preview.py
+```
+
+It reads the study UID from the source DICOM file, not the PNG, and uploads to:
+
+```text
+processed/previews/{study_uid}/preview_CT_small.png
+```
+
+Commands used:
+
+```bash
+docker compose ps
+./services/preview-generator/.venv/bin/python services/preview-generator/generate_preview.py
+./services/preview-generator/.venv/bin/python services/preview-generator/upload_preview.py
+```
+
+The generator produced a 128x128 grayscale PNG. Opening it locally showed a clear CT cross-section, confirming the windowing worked. Listing the MinIO bucket confirmed the preview sits next to the Step 5 anonymized DICOM object.
+
+Screenshots:
+
+![Preview PNG opened locally](images/step-6-preview-local.png)
+
+![MinIO console showing the preview object](images/step-6-minio-preview-object.png)
