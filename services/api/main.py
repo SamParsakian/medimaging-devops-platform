@@ -62,7 +62,8 @@ async def require_api_key(request: Request, call_next):
 STUDY_COLUMNS = (
     "orthanc_study_id, study_instance_uid, patient_id, modality, "
     "study_date, study_description, series_count, instance_count, "
-    "processing_status, preview_object_path"
+    "processing_status, preview_object_path, anonymization_status, "
+    "preview_status, upload_status, last_error"
 )
 
 AUDIT_COLUMNS = "event_id, user_id, action, study_id, timestamp, ip_address, status"
@@ -99,6 +100,10 @@ def row_to_study(row):
         "instance_count": row[7],
         "processing_status": row[8],
         "preview_object_path": row[9],
+        "anonymization_status": row[10],
+        "preview_status": row[11],
+        "upload_status": row[12],
+        "last_error": row[13],
     }
 
 

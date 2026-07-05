@@ -17,6 +17,10 @@ CREATE TABLE IF NOT EXISTS studies (
     instance_count INTEGER NOT NULL DEFAULT 0,
     processing_status TEXT NOT NULL DEFAULT 'pending',
     preview_object_path TEXT,
+    anonymization_status TEXT NOT NULL DEFAULT 'pending',
+    preview_status TEXT NOT NULL DEFAULT 'pending',
+    upload_status TEXT NOT NULL DEFAULT 'pending',
+    last_error TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );

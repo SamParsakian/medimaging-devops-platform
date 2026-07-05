@@ -1,3 +1,4 @@
 minio
 pydicom
+psycopg2-binary
 python-dotenv
