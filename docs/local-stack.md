@@ -85,6 +85,7 @@ No auth, no AI yet - just endpoints in front of the `studies` table:
 - `GET /studies/{orthanc_study_id}` - one study's metadata
 - `GET /studies/{orthanc_study_id}/preview-info` - just the MinIO preview object path (and whether one exists) for that study
 - `GET /studies/{orthanc_study_id}/preview-image` - streams the actual preview PNG from MinIO
+- `GET /audit-events` - the 50 most recent audit events
 
 `PatientID` is always included in responses - this platform's rule is "no real patient data, ever," so every study it can ever hold is demo/anonymized data by definition.
 
@@ -105,3 +106,20 @@ The dashboard's `<img>` tag points at `GET /studies/{id}/preview-image` instead 
 ```text
 http://localhost:8000/dashboard/
 ```
+
+## Audit trail
+
+Every read through the API (`/studies`, `/studies/{id}`, `/studies/{id}/preview-info`, `/studies/{id}/preview-image`) is logged to a Postgres table:
+
+```text
+audit_events
+```
+
+Columns: `event_id`, `user_id`, `action`, `study_id`, `timestamp`, `ip_address`, `status`. There's no real auth yet, so every event is logged under one fixed `user_id`: `demo-user`. `status` is `success` or `not_found`, depending on whether the study/preview existed.
+
+```bash
+docker exec postgres psql -U medimaging -d medimaging -c "SELECT * FROM audit_events ORDER BY event_id DESC LIMIT 10;"
+curl http://localhost:8000/audit-events
+```
+
+The dashboard also shows the 50 most recent events in a table at the bottom of the page, refreshed after every study list load or detail click.
