@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Medical Imaging Dashboard</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <h1>Medical Imaging Dashboard</h1>
+    <p class="subtitle">Demo-grade viewer - no real patient data, no clinical use.</p>
+  </header>
+
+  <main class="layout">
+    <section class="study-list">
+      <h2>Studies</h2>
+      <table>
+        <thead>
+          <tr>
+            <th>Orthanc Study ID</th>
+            <th>Modality</th>
+            <th>Study Date</th>
+            <th>Patient ID</th>
+            <th>Status</th>
+            <th>Preview</th>
+          </tr>
+        </thead>
+        <tbody id="studies-body">
+          <tr><td colspan="6">Loading studies...</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <section class="study-detail" id="study-detail">
+      <h2>Study Detail</h2>
+      <p class="placeholder">Select a study from the list to see details.</p>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

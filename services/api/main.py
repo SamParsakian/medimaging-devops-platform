@@ -1,20 +1,32 @@
 """
 Read-only FastAPI service exposing study metadata and preview info
 from the PostgreSQL `studies` table (populated by
-services/metadata-extractor/extract.py). No auth, no dashboard, no AI
-yet - just a demo-grade read API in front of the existing pipeline.
+services/metadata-extractor/extract.py), plus a small static
+dashboard (services/api/static/) that reads the same endpoints. No
+auth, no AI yet - just a demo-grade read API and viewer in front of
+the existing pipeline.
 """
 
 import os
 
 import psycopg2
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse
+from fastapi.staticfiles import StaticFiles
+from minio import Minio
+from minio.error import S3Error
 
 POSTGRES_HOST = os.environ.get("POSTGRES_HOST", "localhost")
 POSTGRES_PORT = os.environ.get("POSTGRES_PORT", "5432")
 POSTGRES_DB = os.environ.get("POSTGRES_DB", "medimaging")
 POSTGRES_USER = os.environ.get("POSTGRES_USER", "medimaging")
 POSTGRES_PASSWORD = os.environ.get("POSTGRES_PASSWORD", "changeme")
+
+MINIO_HOST = os.environ.get("MINIO_HOST", "localhost")
+MINIO_PORT = os.environ.get("MINIO_PORT", "9000")
+MINIO_ROOT_USER = os.environ.get("MINIO_ROOT_USER", "minioadmin")
+MINIO_ROOT_PASSWORD = os.environ.get("MINIO_ROOT_PASSWORD", "changeme")
+MINIO_BUCKET = os.environ.get("MINIO_BUCKET", "medimaging")
 
 # This platform's safety rule is "no real patient data, ever" - every
 # study it ever holds is demo/anonymized data by design, so PatientID
@@ -37,6 +49,15 @@ def get_connection():
         dbname=POSTGRES_DB,
         user=POSTGRES_USER,
         password=POSTGRES_PASSWORD,
+    )
+
+
+def get_minio_client():
+    return Minio(
+        f"{MINIO_HOST}:{MINIO_PORT}",
+        access_key=MINIO_ROOT_USER,
+        secret_key=MINIO_ROOT_PASSWORD,
+        secure=False,
     )
 
 
@@ -102,3 +123,32 @@ def get_preview_info(study_id: str):
         "preview_object_path": study["preview_object_path"],
         "available": study["preview_object_path"] is not None,
     }
+
+
+@app.get("/studies/{study_id}/preview-image")
+def get_preview_image(study_id: str):
+    """Streams the preview PNG from MinIO, so the dashboard (or any
+    browser) can show it without needing direct MinIO access or
+    credentials - MinIO's bucket stays private."""
+    study = fetch_study(study_id)
+    object_path = study["preview_object_path"]
+    if not object_path:
+        raise HTTPException(status_code=404, detail="No preview available for this study")
+
+    client = get_minio_client()
+    try:
+        response = client.get_object(MINIO_BUCKET, object_path)
+    except S3Error as exc:
+        raise HTTPException(status_code=404, detail="Preview object not found in MinIO") from exc
+
+    def iter_content():
+        try:
+            yield from response.stream(32 * 1024)
+        finally:
+            response.close()
+            response.release_conn()
+
+    return StreamingResponse(iter_content(), media_type="image/png")
+
+
+app.mount("/dashboard", StaticFiles(directory="static", html=True), name="dashboard")

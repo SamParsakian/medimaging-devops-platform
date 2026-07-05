@@ -1,0 +1,114 @@
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  margin: 0;
+  padding: 0 1.5rem 2rem;
+  color: #1a1a1a;
+  background: #fafafa;
+}
+
+header {
+  padding: 1.5rem 0 1rem;
+}
+
+h1 {
+  margin: 0;
+  font-size: 1.5rem;
+}
+
+.subtitle {
+  margin: 0.25rem 0 0;
+  color: #666;
+  font-size: 0.9rem;
+}
+
+.layout {
+  display: flex;
+  gap: 1.5rem;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.study-list {
+  flex: 2;
+  min-width: 420px;
+}
+
+.study-detail {
+  flex: 1;
+  min-width: 320px;
+  background: #fff;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  padding: 1rem 1.25rem;
+}
+
+h2 {
+  font-size: 1.1rem;
+  margin-top: 0;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background: #fff;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  overflow: hidden;
+}
+
+th, td {
+  text-align: left;
+  padding: 0.5rem 0.6rem;
+  border-bottom: 1px solid #eee;
+  font-size: 0.9rem;
+}
+
+.study-list tbody tr {
+  cursor: pointer;
+}
+
+.study-list tbody tr:hover {
+  background: #f0f4ff;
+}
+
+.detail-table th {
+  width: 40%;
+  color: #555;
+  font-weight: 600;
+  vertical-align: top;
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8rem;
+  word-break: break-all;
+}
+
+.placeholder {
+  color: #888;
+  font-style: italic;
+}
+
+.preview-image {
+  max-width: 100%;
+  margin-top: 1rem;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+}
+
+.badge {
+  display: inline-block;
+  padding: 0.1rem 0.5rem;
+  border-radius: 999px;
+  font-size: 0.8rem;
+}
+
+.badge.available {
+  background: #e3f7e8;
+  color: #1a7a34;
+}
+
+.badge.unavailable {
+  background: #f2f2f2;
+  color: #888;
+}
