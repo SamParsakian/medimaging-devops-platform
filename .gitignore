@@ -81,3 +81,6 @@ services/anonymizer/output/
 
 # --- Generated PNG preview output (not stored in repo) ---
 services/preview-generator/output/
+
+# --- Backup/restore output (dumps, MinIO objects, DICOM data - not stored in repo) ---
+scripts/backup/output/

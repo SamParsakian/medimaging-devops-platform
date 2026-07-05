@@ -153,3 +153,7 @@ curl -H "X-API-Key: changeme" http://localhost:8000/audit-events
 ```
 
 The dashboard also shows the 50 most recent events in a table at the bottom of the page, refreshed after every study list load or detail click.
+
+## Backup and restore
+
+`scripts/backup/backup.sh` and `scripts/backup/restore.sh` back up and restore PostgreSQL and MinIO (Orthanc's storage is documented separately since it needs a manual step). See `docs/backup-restore.md` for the full details.
