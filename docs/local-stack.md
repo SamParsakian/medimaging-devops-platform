@@ -50,3 +50,18 @@ python3 -m venv .venv
 cd ../..
 ./services/minio-uploader/.venv/bin/python services/minio-uploader/upload.py
 ```
+
+## Preview generator
+
+`services/preview-generator/generate_preview.py` reads the anonymized DICOM file, applies simple windowing to the pixel data (using `WindowCenter`/`WindowWidth` from the file if present, otherwise a plain min/max stretch) so the CT slice is actually viewable, and writes a PNG to `services/preview-generator/output/`, which is git-ignored.
+
+`services/preview-generator/upload_preview.py` uploads that PNG to MinIO, in the `medimaging` bucket, under a `processed/previews/{study_uid}/{filename}` path. The study UID is read from the source DICOM file, not the PNG.
+
+```bash
+cd services/preview-generator
+python3 -m venv .venv
+./.venv/bin/pip install -r requirements.txt
+cd ../..
+./services/preview-generator/.venv/bin/python services/preview-generator/generate_preview.py
+./services/preview-generator/.venv/bin/python services/preview-generator/upload_preview.py
+```
