@@ -257,4 +257,33 @@ docker compose up -d --build
 
 Log in to Grafana with the admin credentials from `.env` (`GRAFANA_ADMIN_USER` / `GRAFANA_ADMIN_PASSWORD`).
 
-No Loki was added in this step, and no alerting was set up - just the dashboard.
+No Loki was added in this step. Alert rules were added in the next step, "Alerting" below.
+
+## Alerting
+
+Prometheus can evaluate rules on its own and show which ones are firing, without needing a separate Alertmanager - that's what this step uses, since there's no email or Slack notification to send anywhere yet. The rules live at `infra/monitoring/prometheus/alerts.yml` and are loaded by `prometheus.yml`:
+
+```yaml
+rule_files:
+  - /etc/prometheus/alerts.yml
+```
+
+Four alerts are defined:
+
+```text
+APITargetDown          - fires if Prometheus can't scrape the API for 30 seconds
+HighFailedProcessingCount - fires if any study has a failed pipeline stage, for 1 minute
+NoStudiesAvailable      - fires if the studies table is empty, for 2 minutes
+HighAPIErrorRate        - fires if over half of API requests in the last 5 minutes weren't 2xx, for 2 minutes
+```
+
+Each alert has a `for` duration so a single blip doesn't trigger it immediately - the underlying condition has to stay true for that whole window first. Prometheus's own web UI shows both the rule definitions and their live state:
+
+```text
+http://localhost:9090/rules
+http://localhost:9090/alerts
+```
+
+The Rules page shows every rule that's loaded, its query, and whether it's currently healthy. The Alerts page shows the live state of each one: inactive, pending (condition is true but hasn't been true long enough yet), or firing.
+
+No Alertmanager and no email/Slack notifications were added - an alert firing is only visible by looking at the Prometheus UI itself, which is enough for a local demo.

@@ -1,0 +1,43 @@
+groups:
+  - name: imaging-platform-alerts
+    rules:
+      - alert: APITargetDown
+        expr: up{job="api"} == 0
+        for: 30s
+        labels:
+          severity: critical
+        annotations:
+          summary: "API target is down"
+          description: "Prometheus has not been able to scrape the api job for at least 30 seconds."
+
+      - alert: HighFailedProcessingCount
+        expr: studies_failed_total >= 1
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "One or more studies have a failed pipeline stage"
+          description: "studies_failed_total is {{ $value }}. At least one study failed anonymization, preview generation, or upload."
+
+      - alert: NoStudiesAvailable
+        expr: studies_total == 0
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "No studies in the studies table"
+          description: "studies_total has been 0 for at least 2 minutes. The pipeline may not have run yet, or the table was cleared."
+
+      - alert: HighAPIErrorRate
+        expr: |
+          (
+            sum(rate(http_requests_total{status_code!~"2.."}[5m]))
+            /
+            sum(rate(http_requests_total[5m]))
+          ) > 0.5
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High API error rate"
+          description: "More than half of API requests in the last 5 minutes did not return a 2xx status."

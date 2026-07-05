@@ -1020,3 +1020,48 @@ Grafana was opened for the first time at `localhost:3000`, which shows its login
 After logging in, the provisioned "Imaging API Overview" dashboard was opened directly, with all six panels already showing live numbers instead of "No data":
 
 ![Grafana "Imaging API Overview" dashboard showing all six panels with live data](images/step-14-grafana-dashboard.png)
+
+## Step 15 - Basic Monitoring Alerts
+
+In this step, Prometheus was given a small set of alert rules for the platform's most important problems, so a failure shows up as a clear signal instead of something that only turns up if someone happens to check the dashboard.
+
+Prometheus can evaluate rules and track whether they're firing entirely on its own, without needing a separate Alertmanager - that piece is only needed for routing a firing alert somewhere like email or Slack, which this step doesn't add. The rules live in a new file:
+
+```yaml
+groups:
+  - name: imaging-platform-alerts
+    rules:
+      - alert: APITargetDown
+        expr: up{job="api"} == 0
+        for: 30s
+```
+
+Four rules were added in total:
+
+```text
+APITargetDown             - fires if Prometheus can't reach the API for 30 seconds
+HighFailedProcessingCount - fires if any study has a failed pipeline stage, sustained for 1 minute
+NoStudiesAvailable        - fires if the studies table is empty, sustained for 2 minutes
+HighAPIErrorRate          - fires if over half of API requests in the last 5 minutes weren't 2xx, sustained for 2 minutes
+```
+
+Every rule has a `for` duration, so a single bad moment doesn't count - the underlying condition has to stay true for that whole window before the alert actually fires. This avoids false alarms from something like one slow request or a single scrape that happened to land at the wrong moment.
+
+Prometheus's own config was pointed at the new rule file:
+
+```yaml
+rule_files:
+  - /etc/prometheus/alerts.yml
+```
+
+All four rules were confirmed loaded on Prometheus's Rules page, which lists every rule's exact query, its `for` duration, and whether Prometheus considers it healthy to evaluate:
+
+![Prometheus Rules page listing all four alert rules, each showing OK health and its full query](images/step-15-prometheus-rules.png)
+
+To prove an alert actually fires and not just that it's defined, the `api` container was stopped on purpose. Prometheus stopped being able to scrape it, `APITargetDown` moved from inactive to pending, and once the 30-second `for` window passed, it moved to firing. The Alerts page shows this clearly, with the firing count at the top and the exact time the alert became active:
+
+![Prometheus Alerts page showing APITargetDown in a red FIRING state, active for over 3 minutes, with the other three rules inactive](images/step-15-prometheus-alerts-firing.png)
+
+The `api` container was started again right after, and both Prometheus targets returned to a normal `up` state.
+
+No Alertmanager, and no email or Slack notifications, were added in this step - an alert firing is only visible by looking at Prometheus's own Rules and Alerts pages, which is enough for this stack for now.
