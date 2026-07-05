@@ -674,3 +674,48 @@ Screenshots:
 ![Terminal curl to /studies with the correct X-API-Key header, returning real data](images/step-10-authorized-with-key.png)
 
 ![Dashboard fully styled and working at /dashboard/?api_key=changeme, studies and audit events both loaded](images/step-10-dashboard-with-key.png)
+
+## Step 11 - Backup and Restore
+
+In this step, simple backup and restore scripts were added for the local stack.
+
+Two scripts were added under:
+
+```text
+scripts/backup/backup.sh
+scripts/backup/restore.sh
+```
+
+`backup.sh` writes a timestamped folder under `scripts/backup/output/` (git-ignored), containing:
+
+```text
+postgres.sql
+minio/
+orthanc-storage.tar.gz
+```
+
+All three use tools already inside the running containers - no extra images needed. Postgres is dumped with `pg_dump --clean --if-exists` so it drops and recreates its own tables on restore. MinIO objects are copied out with `mc mirror` (MinIO's own client, already bundled in the `minio` container). Orthanc's storage volume is tarred with `tar`, run inside the `orthanc` container itself, then copied to the host with `docker cp`.
+
+`restore.sh` takes a backup folder as its argument, asks for a `y`/`N` confirmation, then restores PostgreSQL and MinIO the same way in reverse. Orthanc's storage is not auto-restored - its DICOM files and internal index have to stay consistent with each other, and restoring them safely means stopping the container first, which felt like more risk than this step needed. `docs/backup-restore.md` documents the manual steps instead.
+
+Commands used:
+
+```bash
+./scripts/backup/backup.sh
+```
+
+Restore was tested for real, not just read through. After taking a backup, the current state was deliberately damaged: one throwaway row was inserted into `audit_events`, and the CT preview PNG was deleted from MinIO with `mc rm`. Row count went from 15 to 16, and the preview object was confirmed gone. Running `restore.sh` against the backup brought the row count back to 15 (the throwaway row was gone), and the deleted preview object was back in MinIO.
+
+```bash
+docker exec postgres psql -U medimaging -d medimaging -c "INSERT INTO audit_events (user_id, action, study_id, status) VALUES ('demo-user', 'simulated_drift_row', 'test-only', 'success');"
+docker exec minio mc rm "local/medimaging/processed/previews/1.3.6.1.4.1.5962.1.2.1.20040119072730.12322/preview_CT_small.png"
+./scripts/backup/restore.sh scripts/backup/output/20260705-113904
+docker exec postgres psql -U medimaging -d medimaging -c "SELECT COUNT(*) FROM audit_events;"
+docker exec minio mc ls local/medimaging/processed/previews --recursive
+```
+
+Screenshots:
+
+![Backup folder listing showing postgres.sql, minio/, and orthanc-storage.tar.gz](images/step-11-backup-files.png)
+
+![Restore verification: audit_events count and both preview objects in MinIO](images/step-11-restore-verification.png)
