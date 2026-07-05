@@ -1125,3 +1125,49 @@ curl http://localhost:8000/health
 
 ![Terminal output of the runbook's basic check commands: docker compose ps listing all six healthy containers, pg_isready accepting connections, and MinIO's cluster reporting ready](images/step-16-incident-check-flow.png)
 
+
+## Step 17 - Security Documentation
+
+In this step, a new `docs/security.md` was written: a plain statement of what this platform actually protects today, and what it deliberately doesn't, rather than a document that just lists security features without saying where the real gaps are.
+
+The document covers ten specific areas:
+
+```text
+No real patient data, ever
+Demo API key protection
+Secrets stay in .env
+.env is git-ignored
+Anonymization before preview, storage, or AI
+Audit logging
+Backup and restore awareness
+MinIO, PostgreSQL, and Orthanc access
+Local-only demo limits
+No clinical diagnosis claims
+```
+
+Most of these just point back at work already done in earlier steps and say plainly what it does and doesn't cover - for example, the audit logging section says the `audit_events` table records what was accessed and by which fixed demo user, but is honest that there's no real user identity behind that yet, so it's closer to "a record exists" than "proof of who specifically did it."
+
+One fact worth calling out specifically, since it's easy to assume otherwise: `docker-compose.yml` never pins a host IP on any of its port mappings, which means Docker binds PostgreSQL, MinIO, and Orthanc to every network interface on the host, not just `localhost`. That was checked directly rather than assumed:
+
+```yaml
+ports:
+  - "${POSTGRES_PORT:-5432}:5432"
+```
+
+A mapping written this way, without a host IP before the colon, is Docker's default "bind to `0.0.0.0`" form. In plain terms, on a machine with no firewall between it and the local network, those three services are technically reachable from other devices on the same network, protected only by their passwords from `.env` - a reasonable tradeoff on a personal laptop at home, but not something to gloss over.
+
+A short "Production improvements" section closes the document, naming seven concrete steps a real deployment would need that this project doesn't have:
+
+```text
+HTTPS / reverse proxy
+Real identity provider
+RBAC
+Stronger DICOM de-identification (PS3.15 / Supplement 142)
+Secret manager
+Network segmentation
+Vulnerability scanning
+```
+
+These are named as an honest acknowledgment of the gap between a local demo and a real deployment, not a to-do list for this project.
+
+The rest of the project stays untouched this step - just the new document, at [docs/security.md](../docs/security.md).
