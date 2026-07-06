@@ -1,11 +1,12 @@
 # Local Stack
 
-Six services make up the stack:
+Seven services make up the stack:
 
 - **Orthanc** - the DICOM server (PACS). Receives, stores, and serves medical images, and exposes a REST API and web UI on top of the standard DICOM protocol.
 - **PostgreSQL** - holds structured metadata about the imaging data (e.g. a reference table for studies), separate from the actual image files.
 - **MinIO** - S3-compatible object storage, for anything file-based that isn't in Orthanc directly: processed/anonymized DICOM files today, previews, AI outputs, and backups later.
 - **API** - a read-only FastAPI service in front of the `studies` table, so study metadata and preview info can be queried over HTTP instead of going straight to Postgres.
+- **AI inference** - a separate FastAPI service that runs a small demo classifier over a study's preview image and returns a JSON result. CPU only, no trained neural network, no clinical use.
 - **Prometheus** - scrapes and stores the API's metrics over time.
 - **Grafana** - reads from Prometheus and shows those metrics on a dashboard.
 
@@ -16,6 +17,7 @@ Six services make up the stack:
 - MinIO API: http://localhost:9000
 - MinIO console: http://localhost:9001
 - API: http://localhost:8000 (Swagger UI at http://localhost:8000/docs)
+- AI inference: http://localhost:8100 (Swagger UI at http://localhost:8100/docs)
 - Prometheus: http://localhost:9090
 - Grafana: http://localhost:3000
 
@@ -142,6 +144,51 @@ http://localhost:8000/dashboard/?api_key=changeme
 ```
 
 The page reads the key from its own URL and attaches it to every API call it makes after that.
+
+## AI inference
+
+`services/ai-inference/` is a separate FastAPI service, its own container, that takes a preview image already stored in MinIO and returns a JSON result. It runs on CPU only - no GPU, no model training, and no external AI service is called.
+
+The classifier itself (`services/ai-inference/main.py`, function `classify_pixels`) is based on pixel-intensity statistics: it converts the image to grayscale, measures how much its pixel intensities vary relative to their average brightness, and buckets that into one of three labels:
+
+```text
+low_variation_region
+moderate_variation_region
+high_variation_region
+```
+
+It has its own endpoints:
+
+```text
+GET  /health   - container healthcheck
+POST /infer    - body: {"object_path": "processed/previews/.../preview_x.png"}
+```
+
+```bash
+curl -X POST http://localhost:8100/infer \
+  -H "Content-Type: application/json" \
+  -d '{"object_path": "processed/previews/<study-uid>/<preview-file>.png"}'
+```
+
+The API service never needs MinIO credentials handed to a caller for this - a new endpoint, `POST /studies/{id}/infer`, looks up that study's own `preview_object_path` and proxies the call to the ai-inference service, the same "API is the only thing that talks to MinIO directly" pattern used everywhere else in this project. It's behind the same API key as every other non-public endpoint.
+
+```bash
+curl -X POST -H "X-API-Key: changeme" http://localhost:8000/studies/<orthanc-study-id>/infer
+```
+
+Every response, from either endpoint, includes the same fields:
+
+```text
+model_name             - "demo-image-stat-classifier"
+model_version          - "0.1.0"
+input_object           - the MinIO object path that was analyzed
+prediction_label       - one of the three labels above
+confidence             - 0-1, how far the measured variation sits from a label boundary
+inference_time_ms      - how long the classification itself took
+disclaimer             - "Technical demo only. Not for clinical diagnosis."
+```
+
+The dashboard's Study Detail panel has a "Run AI Demo Inference" button under the preview image, which calls the API's proxy endpoint and shows the same fields, disclaimer included. The ai-inference container itself has no API key check of its own - it isn't meant to be reached directly outside the demo, only through the API's proxy endpoint.
 
 ## Multi-slice series
 

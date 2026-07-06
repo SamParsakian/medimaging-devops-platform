@@ -13,6 +13,7 @@ import time
 from datetime import datetime, timezone
 
 import psycopg2
+import requests
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -63,6 +64,9 @@ MINIO_PORT = os.environ.get("MINIO_PORT", "9000")
 MINIO_ROOT_USER = os.environ.get("MINIO_ROOT_USER", "minioadmin")
 MINIO_ROOT_PASSWORD = os.environ.get("MINIO_ROOT_PASSWORD", "changeme")
 MINIO_BUCKET = os.environ.get("MINIO_BUCKET", "medimaging")
+
+AI_INFERENCE_HOST = os.environ.get("AI_INFERENCE_HOST", "localhost")
+AI_INFERENCE_PORT = os.environ.get("AI_INFERENCE_PORT", "8100")
 
 # This platform's safety rule is "no real patient data, ever" - every
 # study it ever holds is demo/anonymized data by design, so PatientID
@@ -326,6 +330,40 @@ def get_preview_image(study_id: str, request: Request):
 
     log_audit_event(request, "view_preview_image", study_id, "success")
     return result
+
+
+@app.post("/studies/{study_id}/infer")
+def run_inference(study_id: str, request: Request):
+    """Proxies to the ai-inference service (Step 21) using the study's
+    own preview image as input, so a caller never needs direct MinIO
+    or ai-inference access - same idea as stream_minio_object above."""
+    try:
+        study = fetch_study(study_id)
+    except HTTPException:
+        log_audit_event(request, "run_inference", study_id, "not_found")
+        raise
+
+    object_path = study["preview_object_path"]
+    if not object_path:
+        log_audit_event(request, "run_inference", study_id, "not_found")
+        raise HTTPException(status_code=404, detail="No preview available for this study")
+
+    try:
+        ai_response = requests.post(
+            f"http://{AI_INFERENCE_HOST}:{AI_INFERENCE_PORT}/infer",
+            json={"object_path": object_path},
+            timeout=10,
+        )
+    except requests.RequestException as exc:
+        log_audit_event(request, "run_inference", study_id, "error")
+        raise HTTPException(status_code=502, detail="AI inference service unavailable") from exc
+
+    if ai_response.status_code != 200:
+        log_audit_event(request, "run_inference", study_id, "error")
+        raise HTTPException(status_code=502, detail="AI inference service returned an error")
+
+    log_audit_event(request, "run_inference", study_id, "success")
+    return ai_response.json()
 
 
 @app.get("/studies/{study_id}/slices")
