@@ -190,6 +190,33 @@ disclaimer             - "Technical demo only. Not for clinical diagnosis."
 
 The dashboard's Study Detail panel has a "Run AI Demo Inference" button under the preview image, which calls the API's proxy endpoint and shows the same fields, disclaimer included. The ai-inference container itself has no API key check of its own - it isn't meant to be reached directly outside the demo, only through the API's proxy endpoint.
 
+## Storing AI results
+
+Every time `POST /studies/{id}/infer` gets a result back from ai-inference, it saves that result as a new row in a Postgres table before returning it, so a study's AI history isn't lost between requests:
+
+```sql
+CREATE TABLE IF NOT EXISTS ai_results (
+    result_id SERIAL PRIMARY KEY,
+    orthanc_study_id TEXT NOT NULL,
+    input_object TEXT NOT NULL,
+    model_name TEXT NOT NULL,
+    model_version TEXT NOT NULL,
+    prediction_label TEXT NOT NULL,
+    confidence DOUBLE PRECISION NOT NULL,
+    inference_time_ms DOUBLE PRECISION NOT NULL,
+    disclaimer TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+```
+
+A new endpoint lists every result stored for a study, newest first:
+
+```bash
+curl -H "X-API-Key: changeme" http://localhost:8000/studies/<orthanc-study-id>/ai-results
+```
+
+The dashboard's Study Detail panel loads this list alongside everything else and shows the newest entry in the same result box the "Run AI Demo Inference" button uses, so the most recent AI result for a study is visible as soon as it's selected, not only right after clicking the button. A study with no stored result yet shows a plain "No AI result yet for this study" message instead.
+
 ## Multi-slice series
 
 Every study up to this point has been a single DICOM instance - one slice, one preview. Step 18 added a real multi-slice series (see `docs/sample-data.md` for where it comes from) and the pieces needed to page through it.

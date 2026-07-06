@@ -147,3 +147,53 @@ def test_classify_pixels_labels_a_uniform_image_as_low_variation():
 ```
 
 The service runs on CPU only, with no external AI API involved.
+
+## Step 22 - Store AI Inference Results
+
+In this step, every AI inference result started getting saved in PostgreSQL, instead of only existing for as long as the browser tab stayed open.
+
+Step 21's "Run AI Demo Inference" button showed a real result the moment it ran, but reloading the page lost it - there was nowhere for it to live once the request finished. A new table holds one row per inference run:
+
+```sql
+CREATE TABLE IF NOT EXISTS ai_results (
+    result_id SERIAL PRIMARY KEY,
+    orthanc_study_id TEXT NOT NULL,
+    input_object TEXT NOT NULL,
+    model_name TEXT NOT NULL,
+    model_version TEXT NOT NULL,
+    prediction_label TEXT NOT NULL,
+    confidence DOUBLE PRECISION NOT NULL,
+    inference_time_ms DOUBLE PRECISION NOT NULL,
+    disclaimer TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+```
+
+`POST /studies/{id}/infer` now inserts a row as soon as it gets a result back from the ai-inference service, right before returning that same result to the caller:
+
+```python
+result = ai_response.json()
+store_ai_result(study_id, result)
+log_audit_event(request, "run_inference", study_id, "success")
+return result
+```
+
+Querying the table directly shows the row landing exactly as expected, matching what the endpoint returned:
+
+![Terminal running a psql SELECT against ai_results, showing one row with result_id 1, the CT study's orthanc_study_id, prediction_label moderate_variation_region, confidence 0.691, and a created_at timestamp](images/step-22-ai-results-db-row.png)
+
+A new endpoint lists every result stored for a study, newest first:
+
+```text
+GET /studies/{id}/ai-results
+```
+
+Opening it directly in the browser returns the same fields Step 21 introduced, now with a `result_id` and `created_at` added:
+
+![Browser showing the raw JSON response of GET /studies/{id}/ai-results for the CT study: one object with result_id, orthanc_study_id, input_object, model_name, model_version, prediction_label, confidence, inference_time_ms, disclaimer, and created_at](images/step-22-ai-results-endpoint-response.png)
+
+The dashboard's Study Detail panel now loads this list alongside the study, preview, and slice data it already fetched, and shows the newest entry in the same result box the "Run AI Demo Inference" button uses - so opening a study that already has a result shows it immediately, without clicking anything. A study with nothing stored yet shows a plain "No AI result yet for this study" message instead. Opening the MR series from Step 18, whose slice viewer is already in the same panel, shows its own stored result sitting right below it, disclaimer included:
+
+![Dashboard Study Detail panel for the MR study, showing the slice viewer, the Run AI Demo Inference button, and below it a stored result of Model demo-image-stat-classifier, Prediction high_variation_region, Confidence 0.99, Inference Time 7.4 ms, and the disclaimer text, all shown without clicking the button](images/step-22-dashboard-latest-ai-result-mri.png)
+
+Running inference on the same study again adds a second row rather than replacing the first, so a study's AI history builds up over time instead of only ever keeping the last run.

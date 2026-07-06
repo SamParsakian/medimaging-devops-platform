@@ -138,6 +138,11 @@ STUDY_COLUMNS = (
 
 AUDIT_COLUMNS = "event_id, user_id, action, study_id, timestamp, ip_address, status"
 
+AI_RESULT_COLUMNS = (
+    "result_id, orthanc_study_id, input_object, model_name, model_version, "
+    "prediction_label, confidence, inference_time_ms, disclaimer, created_at"
+)
+
 
 def get_connection():
     return psycopg2.connect(
@@ -187,6 +192,49 @@ def row_to_audit_event(row):
         "ip_address": row[5],
         "status": row[6],
     }
+
+
+def row_to_ai_result(row):
+    return {
+        "result_id": row[0],
+        "orthanc_study_id": row[1],
+        "input_object": row[2],
+        "model_name": row[3],
+        "model_version": row[4],
+        "prediction_label": row[5],
+        "confidence": row[6],
+        "inference_time_ms": row[7],
+        "disclaimer": row[8],
+        "created_at": row[9].isoformat() if row[9] else None,
+    }
+
+
+def store_ai_result(study_id, result):
+    conn = get_connection()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO ai_results (
+                        orthanc_study_id, input_object, model_name, model_version,
+                        prediction_label, confidence, inference_time_ms, disclaimer
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        study_id,
+                        result["input_object"],
+                        result["model_name"],
+                        result["model_version"],
+                        result["prediction_label"],
+                        result["confidence"],
+                        result["inference_time_ms"],
+                        result["disclaimer"],
+                    ),
+                )
+    finally:
+        conn.close()
 
 
 def log_audit_event(request: Request, action: str, study_id, status: str):
@@ -362,8 +410,36 @@ def run_inference(study_id: str, request: Request):
         log_audit_event(request, "run_inference", study_id, "error")
         raise HTTPException(status_code=502, detail="AI inference service returned an error")
 
+    result = ai_response.json()
+    store_ai_result(study_id, result)
     log_audit_event(request, "run_inference", study_id, "success")
-    return ai_response.json()
+    return result
+
+
+@app.get("/studies/{study_id}/ai-results")
+def list_ai_results(study_id: str, request: Request):
+    """Every AI result ever stored for a study, newest first - so the
+    dashboard can show the latest one without losing earlier runs."""
+    try:
+        fetch_study(study_id)
+    except HTTPException:
+        log_audit_event(request, "list_ai_results", study_id, "not_found")
+        raise
+
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"SELECT {AI_RESULT_COLUMNS} FROM ai_results "
+                "WHERE orthanc_study_id = %s ORDER BY created_at DESC",
+                (study_id,),
+            )
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    log_audit_event(request, "list_ai_results", study_id, "success")
+    return [row_to_ai_result(row) for row in rows]
 
 
 @app.get("/studies/{study_id}/slices")

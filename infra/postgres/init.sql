@@ -53,3 +53,20 @@ CREATE TABLE IF NOT EXISTS study_slices (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (orthanc_study_id, slice_index)
 );
+
+-- One row per AI inference run (see services/ai-inference/), so a
+-- study can keep more than one result over time instead of only ever
+-- showing the most recent one.
+
+CREATE TABLE IF NOT EXISTS ai_results (
+    result_id SERIAL PRIMARY KEY,
+    orthanc_study_id TEXT NOT NULL,
+    input_object TEXT NOT NULL,
+    model_name TEXT NOT NULL,
+    model_version TEXT NOT NULL,
+    prediction_label TEXT NOT NULL,
+    confidence DOUBLE PRECISION NOT NULL,
+    inference_time_ms DOUBLE PRECISION NOT NULL,
+    disclaimer TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
