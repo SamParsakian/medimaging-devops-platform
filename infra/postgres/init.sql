@@ -37,3 +37,19 @@ CREATE TABLE IF NOT EXISTS audit_events (
     ip_address TEXT,
     status TEXT NOT NULL DEFAULT 'success'
 );
+
+-- One row per slice preview, for studies with more than one image
+-- (a real multi-slice CT/MRI series). Most studies only ever need the
+-- single whole-study preview already on `studies.preview_object_path`;
+-- this table is only populated for series with several slices to page
+-- through (see services/metadata-extractor/register_slice_previews.py).
+
+CREATE TABLE IF NOT EXISTS study_slices (
+    id SERIAL PRIMARY KEY,
+    orthanc_study_id TEXT NOT NULL,
+    slice_index INTEGER NOT NULL,
+    instance_number INTEGER,
+    preview_object_path TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (orthanc_study_id, slice_index)
+);
