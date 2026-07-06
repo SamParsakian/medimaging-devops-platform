@@ -359,6 +359,18 @@
       updateSliceView(studyId);
     }
 
+    function renderAiResult(data) {
+      return `
+        <table class="detail-table">
+          <tr><th>Model</th><td>${data.model_name} (v${data.model_version})</td></tr>
+          <tr><th>Prediction</th><td>${data.prediction_label}</td></tr>
+          <tr><th>Confidence</th><td>${data.confidence}</td></tr>
+          <tr><th>Inference Time</th><td>${data.inference_time_ms} ms</td></tr>
+        </table>
+        <p class="disclaimer">${data.disclaimer}</p>
+      `;
+    }
+
     async function runInference(studyId) {
       const resultBox = document.getElementById("inference-result");
       resultBox.innerHTML = "<p>Running...</p>";
@@ -369,25 +381,18 @@
           resultBox.innerHTML = `<p class="error-text">${data.detail ?? "Inference failed"}</p>`;
           return;
         }
-        resultBox.innerHTML = `
-          <table class="detail-table">
-            <tr><th>Model</th><td>${data.model_name} (v${data.model_version})</td></tr>
-            <tr><th>Prediction</th><td>${data.prediction_label}</td></tr>
-            <tr><th>Confidence</th><td>${data.confidence}</td></tr>
-            <tr><th>Inference Time</th><td>${data.inference_time_ms} ms</td></tr>
-          </table>
-          <p class="disclaimer">${data.disclaimer}</p>
-        `;
+        resultBox.innerHTML = renderAiResult(data);
       } catch (err) {
         resultBox.innerHTML = `<p class="error-text">Could not reach the AI inference service.</p>`;
       }
     }
 
     async function loadStudyDetail(studyId) {
-      const [study, previewInfo, slices] = await Promise.all([
+      const [study, previewInfo, slices, aiResults] = await Promise.all([
         apiFetch(`/studies/${studyId}`).then((r) => r.json()),
         apiFetch(`/studies/${studyId}/preview-info`).then((r) => r.json()),
         apiFetch(`/studies/${studyId}/slices`).then((r) => r.json()),
+        apiFetch(`/studies/${studyId}/ai-results`).then((r) => r.json()),
       ]);
 
       // A study with registered slices gets Previous/Next/slider
@@ -417,6 +422,10 @@
         ? `<tr><th>Last Error</th><td class="error-text">${study.last_error}</td></tr>`
         : "";
 
+      const latestAiResult = aiResults.length > 0
+        ? renderAiResult(aiResults[0])
+        : `<p class="placeholder">No AI result yet for this study.</p>`;
+
       detailSection.innerHTML = `
         <h2>Study Detail</h2>
         <table class="detail-table">
@@ -437,7 +446,7 @@
         ${previewBlock}
         <div class="ai-inference">
           <button id="run-inference-btn" type="button" ${previewInfo.available ? "" : "disabled"}>Run AI Demo Inference</button>
-          <div id="inference-result"></div>
+          <div id="inference-result">${latestAiResult}</div>
         </div>
       `;
 
