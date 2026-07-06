@@ -14,11 +14,12 @@ import time
 from datetime import datetime, timezone
 
 import numpy as np
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Response
 from minio import Minio
 from minio.error import S3Error
-from PIL import Image
-from pydantic import BaseModel
+from PIL import Image, UnidentifiedImageError
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, Info, generate_latest
+from pydantic import BaseModel, Field
 
 SERVICE_NAME = "ai-inference"
 MODEL_NAME = "demo-image-stat-classifier"
@@ -30,6 +31,21 @@ DISCLAIMER = "Technical demo only. Not for clinical diagnosis."
 # against any clinical meaning - just descriptive image statistics.
 LOW_VARIATION_THRESHOLD = 0.4
 HIGH_VARIATION_THRESHOLD = 0.9
+
+INFERENCE_REQUESTS = Counter(
+    "ai_inference_requests_total", "Total requests received by /infer",
+)
+INFERENCE_FAILURES = Counter(
+    "ai_inference_failures_total", "Total /infer requests that failed",
+    ["reason"],
+)
+INFERENCE_DURATION = Histogram(
+    "ai_inference_duration_seconds", "Time spent handling an /infer request, in seconds",
+)
+MODEL_INFO = Info(
+    "ai_inference_model", "Model name and version currently running",
+)
+MODEL_INFO.info({"model_name": MODEL_NAME, "model_version": MODEL_VERSION})
 
 
 def log_event(action, status="success", error=None, level="INFO", **extra):
@@ -90,7 +106,7 @@ def classify_pixels(pixels):
 
 
 class InferRequest(BaseModel):
-    object_path: str
+    object_path: str = Field(..., min_length=1)
 
 
 app = FastAPI(title="Demo AI Inference Service")
@@ -101,8 +117,14 @@ def health():
     return {"status": "ok"}
 
 
+@app.get("/metrics")
+def metrics():
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+
 @app.post("/infer")
 def infer(request: InferRequest):
+    INFERENCE_REQUESTS.inc()
     started = time.monotonic()
     client = get_minio_client()
 
@@ -114,17 +136,31 @@ def infer(request: InferRequest):
             response.close()
             response.release_conn()
     except S3Error as exc:
+        INFERENCE_DURATION.observe(time.monotonic() - started)
+        INFERENCE_FAILURES.labels(reason="not_found").inc()
         log_event(
             "infer", status="not_found", level="ERROR",
             error=str(exc), input_object=request.object_path,
         )
         raise HTTPException(status_code=404, detail="Input object not found in MinIO") from exc
 
-    image = Image.open(io.BytesIO(image_bytes)).convert("L")
-    pixels = np.array(image)
+    try:
+        image = Image.open(io.BytesIO(image_bytes)).convert("L")
+        pixels = np.array(image)
+    except (UnidentifiedImageError, OSError) as exc:
+        INFERENCE_DURATION.observe(time.monotonic() - started)
+        INFERENCE_FAILURES.labels(reason="invalid_image").inc()
+        log_event(
+            "infer", status="invalid_image", level="ERROR",
+            error=str(exc), input_object=request.object_path,
+        )
+        raise HTTPException(status_code=422, detail="Input object is not a valid image") from exc
+
     label, confidence = classify_pixels(pixels)
 
-    inference_time_ms = round((time.monotonic() - started) * 1000, 1)
+    elapsed = time.monotonic() - started
+    INFERENCE_DURATION.observe(elapsed)
+    inference_time_ms = round(elapsed * 1000, 1)
 
     result = {
         "model_name": MODEL_NAME,
