@@ -1314,17 +1314,4 @@ This repository doesn't have a GitHub remote yet, so there's no live Actions run
 ![Terminal output of all four CI checks run locally: docker compose config, shell syntax check, python -m compileall, and pytest, all passing with 5 of 5 tests passed](images/step-19-ci-checks-local-run.png)
 
 
-## Step 20 - GitHub Remote and Real CI Verification
-
-In this step, the project was connected to its real GitHub repository for the first time, and the CI workflow from Step 19 was verified running for real instead of only locally.
-
-```bash
-git remote add origin https://github.com/SamParsakian/medimaging-devops-platform.git
-git push -u origin main
-```
-
-Pushing `main` triggered the workflow automatically. It finished in 21 seconds, with every step passing:
-
-Screenshots: pending - waiting on Sam to drop them in screenshots/
-
-No fix was needed - the workflow that was checked locally in Step 19 passed on its first real run.
+Steps 0 through 19 are above. The record continues in [project-record-2.md](project-record-2.md), starting at Step 20 - connecting the project to GitHub for real.
