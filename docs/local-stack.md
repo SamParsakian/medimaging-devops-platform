@@ -314,3 +314,28 @@ http://localhost:9090/alerts
 The Rules page shows every rule that's loaded, its query, and whether it's currently healthy. The Alerts page shows the live state of each one: inactive, pending (condition is true but hasn't been true long enough yet), or firing.
 
 No Alertmanager and no email/Slack notifications were added - an alert firing is only visible by looking at the Prometheus UI itself, which is enough for a local demo.
+
+## Continuous integration
+
+`.github/workflows/ci.yml` runs a few basic checks on every push and pull request, using only safe demo values (copied from `.env.example`) - no real secrets are needed to run CI:
+
+```text
+docker compose config          - the compose file and its env var substitutions are valid
+bash -n on every script         - every shell script parses without syntax errors
+python -m compileall             - every Python file parses without syntax errors
+pytest tests/                    - a handful of small unit tests on pure logic
+```
+
+The same checks can be run on the host before pushing, the same way CI runs them:
+
+```bash
+cp .env.example .env
+docker compose config
+for f in $(find scripts -name "*.sh"); do bash -n "$f"; done
+pip install pytest
+for req in services/*/requirements.txt; do pip install -r "$req"; done
+python -m compileall services scripts
+pytest tests/ -v
+```
+
+No Docker images are published and nothing is deployed yet - this is just catching broken syntax and broken config before it reaches `main`.

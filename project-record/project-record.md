@@ -1275,3 +1275,41 @@ docker exec minio mc ls "local/medimaging/processed/previews/1.2.826.0.1.3680043
 ```
 
 ![Terminal output of the two mc ls commands above, showing 15 anonymized DICOM files and 15 preview PNGs](images/step-18-minio-slices-verified.png)
+
+## Step 19 - GitHub Actions CI
+
+In this step, a basic CI workflow was added, so a broken script or a broken config file gets caught automatically on every push instead of only being noticed the next time someone happens to run it by hand.
+
+The workflow lives at [.github/workflows/ci.yml](../.github/workflows/ci.yml) and runs on every push and pull request. It uses only the demo `changeme` values already sitting in `.env.example` - no GitHub Secrets are needed at all, since nothing in this project's CI touches a real credential:
+
+```yaml
+- name: Use safe demo env values
+  run: cp .env.example .env
+```
+
+Four checks run after that:
+
+```text
+docker compose config      - confirms the compose file and its env var substitutions are valid
+bash -n on every script     - confirms every shell script under scripts/ parses without a syntax error
+python -m compileall        - confirms every Python file under services/ and scripts/ parses without a syntax error
+pytest tests/               - runs a handful of small unit tests
+```
+
+A new `tests/` directory holds those unit tests. They only test pure logic that doesn't need Postgres, MinIO, or the DICOM stack running - just the naming and rule functions on their own:
+
+```text
+tests/test_anonymizer_rules.py               - the anonymizer replaces the expected patient fields
+tests/test_preview_generator_naming.py       - preview filenames are built correctly from the source filename
+tests/test_register_slice_previews_naming.py - the same naming logic from Step 18's slice registration script
+```
+
+```python
+def test_build_output_name_strips_the_anonymized_prefix():
+    assert build_output_name(Path("anonymized_CT_small.dcm")) == "preview_CT_small.png"
+```
+
+This repository doesn't have a GitHub remote yet, so there's no live Actions run to point at. Every check in the workflow was instead run locally, in the same order CI runs them, before the workflow file was considered done: a scratch Python environment was built by installing all five services' `requirements.txt` files together (checking they don't conflict with each other), then `compileall` and `pytest` were run against it, alongside `docker compose config` and the shell syntax checks. All of them passed:
+
+![Terminal output of all four CI checks run locally: docker compose config, shell syntax check, python -m compileall, and pytest, all passing with 5 of 5 tests passed](images/step-19-ci-checks-local-run.png)
+
