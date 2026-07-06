@@ -10,5 +10,5 @@ from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 
-for service_dir in ("anonymizer", "preview-generator", "metadata-extractor"):
+for service_dir in ("anonymizer", "preview-generator", "metadata-extractor", "ai-inference"):
     sys.path.insert(0, str(ROOT_DIR / "services" / service_dir))

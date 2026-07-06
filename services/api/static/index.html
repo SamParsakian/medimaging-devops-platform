@@ -168,6 +168,24 @@
     .audit-events {
       margin-top: 1.5rem;
     }
+
+    .ai-inference {
+      margin-top: 1rem;
+      padding-top: 1rem;
+      border-top: 1px solid #eee;
+    }
+
+    .ai-inference button {
+      padding: 0.4rem 0.8rem;
+      cursor: pointer;
+    }
+
+    .disclaimer {
+      margin-top: 0.5rem;
+      color: #8a6a00;
+      font-size: 0.8rem;
+      font-style: italic;
+    }
   </style>
 </head>
 <body>
@@ -232,6 +250,10 @@
 
     function apiFetch(url) {
       return fetch(url, { headers: { "X-API-Key": apiKey } });
+    }
+
+    function apiPost(url) {
+      return fetch(url, { method: "POST", headers: { "X-API-Key": apiKey } });
     }
 
     function withApiKey(url) {
@@ -337,6 +359,30 @@
       updateSliceView(studyId);
     }
 
+    async function runInference(studyId) {
+      const resultBox = document.getElementById("inference-result");
+      resultBox.innerHTML = "<p>Running...</p>";
+      try {
+        const response = await apiPost(`/studies/${studyId}/infer`);
+        const data = await response.json();
+        if (!response.ok) {
+          resultBox.innerHTML = `<p class="error-text">${data.detail ?? "Inference failed"}</p>`;
+          return;
+        }
+        resultBox.innerHTML = `
+          <table class="detail-table">
+            <tr><th>Model</th><td>${data.model_name} (v${data.model_version})</td></tr>
+            <tr><th>Prediction</th><td>${data.prediction_label}</td></tr>
+            <tr><th>Confidence</th><td>${data.confidence}</td></tr>
+            <tr><th>Inference Time</th><td>${data.inference_time_ms} ms</td></tr>
+          </table>
+          <p class="disclaimer">${data.disclaimer}</p>
+        `;
+      } catch (err) {
+        resultBox.innerHTML = `<p class="error-text">Could not reach the AI inference service.</p>`;
+      }
+    }
+
     async function loadStudyDetail(studyId) {
       const [study, previewInfo, slices] = await Promise.all([
         apiFetch(`/studies/${studyId}`).then((r) => r.json()),
@@ -389,11 +435,17 @@
           <tr><th>MinIO Preview Path</th><td class="mono">${previewInfo.preview_object_path ?? "n/a"}</td></tr>
         </table>
         ${previewBlock}
+        <div class="ai-inference">
+          <button id="run-inference-btn" type="button" ${previewInfo.available ? "" : "disabled"}>Run AI Demo Inference</button>
+          <div id="inference-result"></div>
+        </div>
       `;
 
       if (slices.length > 0) {
         setupSliceViewer(studyId, slices);
       }
+
+      document.getElementById("run-inference-btn").addEventListener("click", () => runInference(studyId));
 
       loadAuditEvents();
     }

@@ -76,13 +76,39 @@ services:
       MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
       MINIO_BUCKET: ${MINIO_BUCKET}
       API_SECRET_KEY: ${API_SECRET_KEY}
+      AI_INFERENCE_HOST: ai-inference
+      AI_INFERENCE_PORT: 8100
     depends_on:
       postgres:
         condition: service_healthy
       minio:
         condition: service_healthy
+      ai-inference:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+  ai-inference:
+    build:
+      context: ./services/ai-inference
+    container_name: ai-inference
+    restart: unless-stopped
+    ports:
+      - "${AI_INFERENCE_PORT:-8100}:8100"
+    environment:
+      MINIO_HOST: minio
+      MINIO_PORT: 9000
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET: ${MINIO_BUCKET}
+    depends_on:
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8100/health')"]
       interval: 30s
       timeout: 5s
       retries: 5

@@ -58,3 +58,92 @@ Opening that last run shows exactly what CI actually checks on every push: each 
 ![Detailed view of the post-merge CI run, with every step expanded: checkout, Python setup, docker compose config, shell syntax check, dependency install, compileall, and the pytest run showing "5 passed"](images/step-20-post-merge-run-detail.png)
 
 That screenshot is where this check ends: the same workflow from Step 19, holding up through a real push, a real pull request, and a real merge, without a single line of it needing to change.
+
+## Step 21 - Local AI Inference Service
+
+In this step, a new AI inference service was added: its own container, its own FastAPI app, that takes a study's preview image and returns an AI result as JSON.
+
+This step focuses on the plumbing around an AI component - its own container, an input/output contract, and a dashboard hook - built first with a lightweight classifier based on pixel-intensity statistics, ahead of a trained model in a later step.
+
+The new service lives in `services/ai-inference/`, containerized the same way every other service in this project is, and added to `docker-compose.yml` as its own entry:
+
+```yaml
+ai-inference:
+  build:
+    context: ./services/ai-inference
+  container_name: ai-inference
+  restart: unless-stopped
+  ports:
+    - "${AI_INFERENCE_PORT:-8100}:8100"
+  environment:
+    MINIO_HOST: minio
+    MINIO_PORT: 9000
+    MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+    MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    MINIO_BUCKET: ${MINIO_BUCKET}
+  depends_on:
+    minio:
+      condition: service_healthy
+```
+
+Docker Desktop shows it running as its own container, separate from the API, alongside everything else in the stack:
+
+![Docker Desktop container list showing ai-inference as its own running container on port 8100, next to api, orthanc, postgres, minio, prometheus, and grafana](images/step-21-docker-desktop-ai-inference-container.png)
+
+The classifier itself, `classify_pixels` in `services/ai-inference/main.py`, converts the image to grayscale and measures how much its pixel intensities vary relative to their average brightness. That single number gets bucketed into one of three labels:
+
+```python
+if variation >= HIGH_VARIATION_THRESHOLD:
+    label = "high_variation_region"
+elif variation <= LOW_VARIATION_THRESHOLD:
+    label = "low_variation_region"
+else:
+    label = "moderate_variation_region"
+```
+
+Every result the service returns also carries a fixed disclaimer field, `"Technical demo only. Not for clinical diagnosis."`, alongside the label.
+
+The service exposes two endpoints:
+
+```text
+GET  /health
+POST /infer
+```
+
+`/health` was checked directly through the service's own Swagger page:
+
+![Swagger UI for the ai-inference service, GET /health executed, showing a 200 response with {"status": "ok"}](images/step-21-ai-inference-health-check.png)
+
+`/infer` takes the MinIO path of a preview image already produced by the existing pipeline (Step 6's preview generator) and returns the model name, version, the input path, the predicted label, a confidence score, how long the classification took, and the disclaimer:
+
+![Swagger UI for POST /infer, request body pointing at a real preview PNG, showing a 200 response with model_name, prediction_label "moderate_variation_region", confidence, inference_time_ms, and the disclaimer](images/step-21-ai-inference-infer-response.png)
+
+The existing `services/api` gained one new endpoint, `POST /studies/{id}/infer`, so a caller never has to know the ai-inference service or MinIO exist at all - it looks up the study's own preview path from Postgres and calls ai-inference on the caller's behalf, the same pattern the API already uses for streaming preview images:
+
+```python
+object_path = study["preview_object_path"]
+ai_response = requests.post(
+    f"http://{AI_INFERENCE_HOST}:{AI_INFERENCE_PORT}/infer",
+    json={"object_path": object_path},
+    timeout=10,
+)
+```
+
+This endpoint sits behind the same API key middleware as every other endpoint in this project, so it was not given any auth logic of its own.
+
+The dashboard's Study Detail panel got one new button, "Run AI Demo Inference," which calls that endpoint and shows the result inline. Clicking it on the MR series from Step 18 produced this result, and the audit trail underneath shows the `run_inference` event that click created:
+
+![Dashboard Study Detail panel for the MR study, showing the Run AI Demo Inference button, a result of Model demo-image-stat-classifier, Prediction high_variation_region, Confidence 0.99, Inference Time 6.9 ms, the disclaimer text, and a run_inference row in the Recent Audit Events table below](images/step-21-dashboard-ai-inference-result.png)
+
+The button always analyzes the study's one stored preview image, the same one shown before any slice is picked with Previous/Next - not whichever slice happens to be selected in the slider at the time.
+
+Three small unit tests were added for `classify_pixels`, following the same pattern as every other pure-logic test in this project - no MinIO, no running containers, just the function itself against known pixel arrays:
+
+```python
+def test_classify_pixels_labels_a_uniform_image_as_low_variation():
+    pixels = np.full((32, 32), 120, dtype=np.uint8)
+    label, confidence = classify_pixels(pixels)
+    assert label == "low_variation_region"
+```
+
+The service runs on CPU only, with no external AI API involved.
