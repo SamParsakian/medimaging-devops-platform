@@ -125,6 +125,7 @@ services:
       - prometheus-data:/prometheus
     depends_on:
       - api
+      - ai-inference
 
   grafana:
     image: grafana/grafana:latest

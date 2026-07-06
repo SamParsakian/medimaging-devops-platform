@@ -170,7 +170,9 @@ curl -X POST http://localhost:8100/infer \
   -d '{"object_path": "processed/previews/<study-uid>/<preview-file>.png"}'
 ```
 
-The API service never needs MinIO credentials handed to a caller for this - a new endpoint, `POST /studies/{id}/infer`, looks up that study's own `preview_object_path` and proxies the call to the ai-inference service, the same "API is the only thing that talks to MinIO directly" pattern used everywhere else in this project. It's behind the same API key as every other non-public endpoint.
+`/infer` rejects bad input cleanly instead of crashing: a missing or non-existent `object_path` returns 404, an object that isn't a valid image (wrong file entirely, or corrupt image bytes) returns 422, and a request body missing `object_path` (or sending an empty string) also returns 422 from the same field validation FastAPI already does automatically.
+
+The API service never needs MinIO credentials handed to a caller for this - a new endpoint, `POST /studies/{id}/infer`, looks up that study's own `preview_object_path` and proxies the call to the ai-inference service, the same "API is the only thing that talks to MinIO directly" pattern used everywhere else in this project. It's behind the same API key as every other non-public endpoint, and it forwards ai-inference's own status code and message when something goes wrong (404, 422) rather than flattening every failure into a generic error - a 502 is only used if ai-inference itself can't be reached at all.
 
 ```bash
 curl -X POST -H "X-API-Key: changeme" http://localhost:8000/studies/<orthanc-study-id>/infer
@@ -314,7 +316,7 @@ and directly in the terminal for the pipeline scripts, since those still run man
 
 Prometheus and Grafana were added as two more containers in `docker-compose.yml`. Prometheus scrapes metrics on a timer and stores them; Grafana reads from Prometheus and draws them on a dashboard. Neither of them touches the structured logs from the section above - that's a separate concern, for later.
 
-Prometheus's config lives at `infra/monitoring/prometheus/prometheus.yml` and defines two scrape targets:
+Prometheus's config lives at `infra/monitoring/prometheus/prometheus.yml` and defines three scrape targets:
 
 ```yaml
 scrape_configs:
@@ -326,6 +328,11 @@ scrape_configs:
     metrics_path: /metrics
     static_configs:
       - targets: ["api:8000"]
+
+  - job_name: ai-inference
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["ai-inference:8100"]
 ```
 
 The API exposes a `GET /metrics` endpoint (using the `prometheus-client` Python library) with these metrics:
@@ -350,7 +357,7 @@ Prometheus's own web UI, at http://localhost:9090, has a Targets page (**Status 
 http://localhost:9090/targets
 ```
 
-Grafana, at http://localhost:3000, comes pre-configured with no manual setup needed: its Prometheus datasource and one dashboard, "Imaging API Overview," are both provisioned automatically from files under `infra/monitoring/grafana/provisioning/` and `infra/monitoring/grafana/dashboards/` when the container starts. The dashboard has six panels: API Up, Service Health (up, across every scrape target), Failed Processing Count, Total API Requests, Average Request Duration, and Studies Total.
+Grafana, at http://localhost:3000, comes pre-configured with no manual setup needed: its Prometheus datasource and both dashboards are provisioned automatically from files under `infra/monitoring/grafana/provisioning/` and `infra/monitoring/grafana/dashboards/` when the container starts. "Imaging API Overview" has six panels: API Up, Service Health (up, across every scrape target), Failed Processing Count, Total API Requests, Average Request Duration, and Studies Total.
 
 ```bash
 docker compose up -d --build
@@ -359,6 +366,23 @@ docker compose up -d --build
 Log in to Grafana with the admin credentials from `.env` (`GRAFANA_ADMIN_USER` / `GRAFANA_ADMIN_PASSWORD`).
 
 No Loki was added in this step. Alert rules were added in the next step, "Alerting" below.
+
+### AI inference metrics
+
+The ai-inference service exposes its own `GET /metrics` endpoint, the same way the API does:
+
+```text
+ai_inference_requests_total    - counter, total requests received by /infer
+ai_inference_failures_total    - counter, labeled by reason (not_found, invalid_image)
+ai_inference_duration_seconds  - histogram of how long each /infer request took
+ai_inference_model_info        - always 1, labeled with model_name and model_version
+```
+
+```bash
+curl http://localhost:8100/metrics
+```
+
+A second Grafana dashboard, "AI Inference Overview," is provisioned the same automatic way, with five panels: AI Service Up, Inference Requests, AI Failures, Average Inference Time, and a Model Info table showing the currently running `model_name`/`model_version` labels.
 
 ## Alerting
 

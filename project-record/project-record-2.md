@@ -197,3 +197,81 @@ The dashboard's Study Detail panel now loads this list alongside the study, prev
 ![Dashboard Study Detail panel for the MR study, showing the slice viewer, the Run AI Demo Inference button, and below it a stored result of Model demo-image-stat-classifier, Prediction high_variation_region, Confidence 0.99, Inference Time 7.4 ms, and the disclaimer text, all shown without clicking the button](images/step-22-dashboard-latest-ai-result-mri.png)
 
 Running inference on the same study again adds a second row rather than replacing the first, so a study's AI history builds up over time instead of only ever keeping the last run.
+
+## Step 23 - AI Operations Polish
+
+In this step, the ai-inference service gained the same kind of operational visibility the rest of the platform already has: metrics, a Prometheus target, a Grafana dashboard, and cleaner handling of bad input instead of an unhandled error.
+
+A new `GET /metrics` endpoint on ai-inference (using `prometheus-client`, the same library the API already uses) exposes:
+
+```text
+ai_inference_requests_total    - counter, total requests received by /infer
+ai_inference_failures_total    - counter, labeled by reason (not_found, invalid_image)
+ai_inference_duration_seconds  - histogram of how long each /infer request took
+ai_inference_model_info        - always 1, labeled with model_name and model_version
+```
+
+```bash
+curl http://localhost:8100/metrics
+```
+
+![Browser showing the raw output of GET /metrics on ai-inference: ai_inference_requests_total, ai_inference_failures_total with reason="not_found", the full ai_inference_duration_seconds histogram, and ai_inference_model_info with model_name and model_version labels](images/step-23-ai-inference-metrics.png)
+
+Prometheus got a third scrape target alongside itself and the API:
+
+```yaml
+  - job_name: ai-inference
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["ai-inference:8100"]
+```
+
+![Prometheus Target health page showing all three scrape jobs - prometheus, api, and ai-inference - each with a green UP state](images/step-23-prometheus-targets.png)
+
+A second Grafana dashboard, "AI Inference Overview," is provisioned automatically the same way the existing one already is, with five panels: AI Service Up, Inference Requests, AI Failures, Average Inference Time, and a Model Info table showing the currently running `model_name`/`model_version`:
+
+![Grafana "AI Inference Overview" dashboard showing all five panels with real values: AI Service Up, Inference Requests, AI Failures, Average Inference Time, and the Model Info table](images/step-23-grafana-ai-panels.png)
+
+`/infer` also got stricter about what it accepts. An empty `object_path` is now rejected before the request is even handled:
+
+```python
+class InferRequest(BaseModel):
+    object_path: str = Field(..., min_length=1)
+```
+
+And an object that exists in MinIO but isn't a valid image (a corrupt file, or the wrong kind of file entirely) now returns a clean 422 instead of crashing:
+
+```python
+try:
+    image = Image.open(io.BytesIO(image_bytes)).convert("L")
+    pixels = np.array(image)
+except (UnidentifiedImageError, OSError) as exc:
+    raise HTTPException(status_code=422, detail="Input object is not a valid image") from exc
+```
+
+Every one of these was tested directly against the running service:
+
+```text
+missing/non-existent object_path  -> 404 "Input object not found in MinIO"
+object exists but isn't an image  -> 422 "Input object is not a valid image"
+request body missing object_path -> 422 (field validation)
+object_path is an empty string    -> 422 (field validation)
+```
+
+![Swagger UI for POST /infer on ai-inference, executed with a non-existent object_path, showing a 404 response with "Input object not found in MinIO"](images/step-23-bad-input-404.png)
+
+The API's proxy endpoint, `POST /studies/{id}/infer`, now forwards ai-inference's own status code and message when something goes wrong, rather than turning every failure into the same generic error:
+
+```python
+if ai_response.status_code != 200:
+    detail = ai_response.json().get("detail", "AI inference service returned an error")
+    raise HTTPException(status_code=ai_response.status_code, detail=detail)
+```
+
+A 502 is reserved for when ai-inference can't be reached at all - stopping the ai-inference container and calling the proxy endpoint returned a clean 502 with `"AI inference service unavailable"`, and starting it back up let a normal request through again right away.
+
+The dashboard, the stored `ai_results` rows, and the disclaimer field all still work exactly as Step 21 and 22 left them:
+
+![Dashboard Study Detail panel for the MR study, showing the stored AI result (Model, Prediction, Confidence, Inference Time) and the disclaimer text, unchanged from Step 22](images/step-23-dashboard-stored-result.png)
+
+Three new pytest tests cover the `InferRequest` validation directly - a normal path is accepted, an empty string is rejected, and a missing field is rejected - no live service needed, following the same pure-logic testing pattern as every other test in this project.

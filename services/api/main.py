@@ -408,7 +408,15 @@ def run_inference(study_id: str, request: Request):
 
     if ai_response.status_code != 200:
         log_audit_event(request, "run_inference", study_id, "error")
-        raise HTTPException(status_code=502, detail="AI inference service returned an error")
+        try:
+            detail = ai_response.json().get("detail", "AI inference service returned an error")
+        except ValueError:
+            detail = "AI inference service returned an error"
+        # Forwards ai-inference's own status code (e.g. 404 for a missing
+        # object, 422 for a bad image) instead of flattening every
+        # non-200 response into a generic 502 - only an actual connection
+        # failure to the service itself is a 502, handled above.
+        raise HTTPException(status_code=ai_response.status_code, detail=detail)
 
     result = ai_response.json()
     store_ai_result(study_id, result)
