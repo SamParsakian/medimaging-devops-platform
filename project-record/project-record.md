@@ -1125,7 +1125,6 @@ curl http://localhost:8000/health
 
 ![Terminal output of the runbook's basic check commands: docker compose ps listing all six healthy containers, pg_isready accepting connections, and MinIO's cluster reporting ready](images/step-16-incident-check-flow.png)
 
-
 ## Step 17 - Security Documentation
 
 In this step, a new `docs/security.md` was written: a plain statement of what this platform actually protects today, and what it deliberately doesn't, rather than a document that just lists security features without saying where the real gaps are.
@@ -1171,3 +1170,108 @@ Vulnerability scanning
 These are named as an honest acknowledgment of the gap between a local demo and a real deployment, not a to-do list for this project.
 
 The rest of the project stays untouched this step - just the new document, at [docs/security.md](../docs/security.md).
+
+## Step 18 - Multi-Slice DICOM Series Viewer
+
+In this step, a real multi-slice MRI series was added to the platform, and the dashboard grew simple slice navigation so it can actually be paged through, instead of every study only ever having one flat preview image.
+
+Every sample used so far (Steps 2, 6, 6B) was a single DICOM instance - one slice, one file. A real scan is never just one image; it's a series of many slices through the body, and this step's whole point was making that work end to end: uploading a real series to Orthanc, generating a preview for each slice, and letting the dashboard move between them.
+
+The series used is a real structural brain MRI, not synthetic test data:
+
+```text
+Source: datalad/example-dicom-structural (public GitHub repo)
+License: Open Data Commons Public Domain Dedication and Licence (PDDL)
+Original scan: a 7-Tesla T1-weighted structural MRI from the studyforrest
+               project, published in Scientific Data 1:140003 (2014)
+```
+
+The repository's own README explains exactly how it was prepared for public release: the scan was de-faced (the face and skin surface removed from the image, a standard research privacy technique that leaves the brain itself untouched) before every identifying DICOM tag was replaced with fake values using `gdcmanon`. The full series has 384 slices, but only 15 are used here, evenly spaced through the part of the volume that actually shows brain anatomy - the very first and last slices in the real series are below the neck or above the skull, and mostly blank. This project's own anonymizer still runs over every slice anyway, on the same "anonymize regardless" habit the other two samples already follow.
+
+```bash
+./scripts/download-multislice-mri-sample.sh
+```
+
+This downloads the 15 selected slices (about 3 MB total) into `sample-data/downloads/multislice-mri/`, git-ignored like every other sample in this project. A second script uploads all 15 to Orthanc:
+
+```bash
+./scripts/upload-multislice-series-to-orthanc.sh
+```
+
+Since every slice shares the same `StudyInstanceUID` and `SeriesInstanceUID`, Orthanc grouped all 15 into one study with one series automatically, with no extra steps needed. `services/metadata-extractor/extract.py` picked up the new study without any code changes at all - it already summed up instance counts across a series generically, it just had never been given a series with more than one instance to prove that worked.
+
+The one real design gap this step needed to close: the `studies` table only ever had a single `preview_object_path` column, enough for one whole-study preview but not fifteen. A new table holds one row per slice instead:
+
+```sql
+CREATE TABLE IF NOT EXISTS study_slices (
+    id SERIAL PRIMARY KEY,
+    orthanc_study_id TEXT NOT NULL,
+    slice_index INTEGER NOT NULL,
+    instance_number INTEGER,
+    preview_object_path TEXT NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (orthanc_study_id, slice_index)
+);
+```
+
+None of the existing single-file pipeline scripts needed to change to handle 15 files instead of one - the anonymizer, preview generator, and MinIO uploader already just take one input file and a sensible default, so a new script simply calls each of them once per slice:
+
+```bash
+./scripts/process-multislice-series.sh
+```
+
+After looping over every slice, that script calls one new script, `services/metadata-extractor/register_slice_previews.py`, which writes the 15 `study_slices` rows: it reads each anonymized file's `StudyInstanceUID` to find the right study, then records the MinIO path the preview generator already uploaded each slice to. The metadata extractor's virtual environment needed `pydicom` added to its requirements, since up to this point it had only ever talked to Orthanc's JSON REST API and never had to read a raw DICOM file itself.
+
+Two new endpoints expose the slices to the dashboard:
+
+```text
+GET /studies/{id}/slices                       - ordered list of {slice_index, instance_number, preview_object_path}
+GET /studies/{id}/slices/{slice_index}/preview-image - streams that one slice's PNG from MinIO
+```
+
+Both reuse the same MinIO-streaming logic the original single-preview endpoint already had - that logic was pulled out into one shared function this step, rather than copied a second time.
+
+In the dashboard, a study with slices registered now gets Previous/Next buttons and a slider under its image instead of one static picture:
+
+```javascript
+function updateSliceView(studyId) {
+  const slice = currentSlices[currentSliceIndex];
+  document.getElementById("slice-image").src = sliceImageUrl(studyId, slice.slice_index);
+  document.getElementById("slice-label").textContent =
+    `Slice ${currentSliceIndex + 1} of ${currentSlices.length} (instance ${slice.instance_number})`;
+  ...
+}
+```
+
+The viewer opens on the middle slice of the series rather than the first one, since the first and last slices of a real scan tend to be the least recognizable part of it. A study with no slices registered still shows its single static preview image exactly as it did before this step - nothing changed for the studies from earlier steps.
+
+To check this for real, the dashboard was opened in a browser and the new MR study was clicked into from the study list. Its slice viewer showed a clear axial brain MRI slice, with the Previous/Next buttons and slider underneath it:
+
+![Dashboard Study Detail panel showing the MR study's slice viewer: a clear axial brain MRI slice (slice 14 of 15, instance 300), with Prev/Next buttons and a slider underneath](images/step-18-dashboard-slice-viewer.png)
+
+Moving the slider to a different position swapped in a different, clearly distinct slice (a lower, brainstem/cerebellum-level view instead of the cortex view above), with the label updating to match:
+
+![The same slice viewer after navigating to a different position: slice 7 of 15 (instance 195), showing a visibly different brain level](images/step-18-dashboard-slice-navigation.png)
+
+The dashboard proves the pipeline visually, but the two places the data actually lives were also checked directly. This series is the first real test of whether the pipeline holds up with more than one image, since later steps (AI, deployment) will build on top of it, so it's worth confirming plainly rather than assuming it from the dashboard alone.
+
+Postgres was checked for all 15 rows in `study_slices`, in the right order:
+
+```bash
+docker exec postgres psql -U medimaging -d medimaging -c \
+  "SELECT COUNT(*) FROM study_slices WHERE orthanc_study_id = '049542bf-43e00dce-1d43f731-9c02960e-d311ff1f';"
+docker exec postgres psql -U medimaging -d medimaging -c \
+  "SELECT slice_index, instance_number, preview_object_path FROM study_slices
+   WHERE orthanc_study_id = '049542bf-43e00dce-1d43f731-9c02960e-d311ff1f' ORDER BY slice_index;"
+```
+
+![Terminal output of the two psql commands above, showing a count of 15 and the ordered slice_index/instance_number/preview_object_path rows](images/step-18-postgres-slices-verified.png)
+
+MinIO was checked for both sets of 15 objects the pipeline is supposed to have uploaded: one anonymized DICOM and one preview PNG per slice:
+
+```bash
+docker exec minio mc ls "local/medimaging/processed/anonymized/1.2.826.0.1.3680043.2.1143.2592092611698916978113112155415165916/"
+docker exec minio mc ls "local/medimaging/processed/previews/1.2.826.0.1.3680043.2.1143.2592092611698916978113112155415165916/"
+```
+
+![Terminal output of the two mc ls commands above, showing 15 anonymized DICOM files and 15 preview PNGs](images/step-18-minio-slices-verified.png)

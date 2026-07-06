@@ -89,6 +89,8 @@ Endpoints in front of the `studies` table (all require an API key except `/healt
 - `GET /studies/{orthanc_study_id}` - one study's metadata
 - `GET /studies/{orthanc_study_id}/preview-info` - just the MinIO preview object path (and whether one exists) for that study
 - `GET /studies/{orthanc_study_id}/preview-image` - streams the actual preview PNG from MinIO
+- `GET /studies/{orthanc_study_id}/slices` - ordered list of slice previews, for a multi-slice series (see "Multi-slice series" below); empty for a single-image study
+- `GET /studies/{orthanc_study_id}/slices/{slice_index}/preview-image` - streams one slice's preview PNG from MinIO
 - `GET /audit-events` - the 50 most recent audit events
 
 `PatientID` is always included in responses - this platform's rule is "no real patient data, ever," so every study it can ever hold is demo/anonymized data by definition.
@@ -140,6 +142,31 @@ http://localhost:8000/dashboard/?api_key=changeme
 ```
 
 The page reads the key from its own URL and attaches it to every API call it makes after that.
+
+## Multi-slice series
+
+Every study up to this point has been a single DICOM instance - one slice, one preview. Step 18 added a real multi-slice series (see `docs/sample-data.md` for where it comes from) and the pieces needed to page through it.
+
+A new table holds one row per slice preview, separate from the single `preview_object_path` column every other study already uses:
+
+```text
+study_slices
+```
+
+Columns: `id`, `orthanc_study_id`, `slice_index` (0-based order), `instance_number` (the real DICOM `InstanceNumber`, for display), `preview_object_path`. Most studies never get a row here at all - it's only populated for a series with more than one slice to page through.
+
+The pipeline for a multi-slice series reuses every existing script exactly as-is, just run once per slice instead of once per study:
+
+```bash
+./scripts/download-multislice-mri-sample.sh
+./scripts/upload-multislice-series-to-orthanc.sh
+./services/metadata-extractor/.venv/bin/python services/metadata-extractor/extract.py
+./scripts/process-multislice-series.sh
+```
+
+`process-multislice-series.sh` loops the anonymizer, preview generator, and MinIO uploader over every downloaded slice, then calls a new script, `services/metadata-extractor/register_slice_previews.py`, which writes one `study_slices` row per slice.
+
+In the dashboard, a study with slices registered gets Previous/Next buttons and a slider under its preview image instead of a single static picture. Clicking through calls `GET /studies/{id}/slices/{slice_index}/preview-image` for whichever slice is selected, the same streaming-from-MinIO approach the single-image `preview-image` endpoint already used. A study with no slices registered still shows its one preview image exactly as before - nothing changed for the existing single-slice studies.
 
 ## Audit trail
 

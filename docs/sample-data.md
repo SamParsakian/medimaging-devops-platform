@@ -35,3 +35,27 @@ Downloaded with:
 ```
 
 This saves it to `sample-data/downloads/examples_overlay.dcm` (git-ignored). It does not touch Orthanc - it's only used as input to the anonymizer/preview-generator/MinIO-uploader pipeline described in `docs/local-stack.md`.
+
+## Third sample: a real multi-slice MRI series
+
+Both samples above are a single DICOM instance each - one slice, no series to page through. For Step 18, a genuine multi-slice series is used instead: 15 slices from a real structural T1-weighted brain MRI scan.
+
+- Source: [datalad/example-dicom-structural](https://github.com/datalad/example-dicom-structural), a public demo DICOM dataset maintained by the [DataLad](https://www.datalad.org/) project.
+- License: [Open Data Commons Public Domain Dedication and Licence (PDDL)](https://github.com/datalad/example-dicom-structural/blob/master/LICENSE) - explicitly public domain, no attribution required, commercial use allowed.
+- Original scan: a 7-Tesla structural MRI from the [studyforrest](http://studyforrest.org/) project, published in Hanke et al., *A high-resolution 7-Tesla fMRI dataset from complex natural stimulation with an audio movie*, Scientific Data 1:140003 (2014).
+- The repo's own README explains how it was prepared: the original NIfTI image was de-faced (the face/skin surface removed, a standard research privacy technique that leaves the brain itself untouched) before being converted to DICOM, and every identifying DICOM tag was then replaced with fake values (`PatientName` set to `Jane_Doe`, etc.) using `gdcmanon`. This project's own anonymizer (Step 4) still runs over it anyway, on the same "anonymize every file regardless" habit as the other two samples.
+- The full series has 384 slices (~80 MB total). Only 15 are used here, evenly spaced through the part of the volume that actually shows brain anatomy - the very first and last slices in the series are below the neck or above the top of the skull, and mostly blank.
+
+Downloaded with:
+
+```bash
+./scripts/download-multislice-mri-sample.sh
+```
+
+This saves the 15 selected slices to `sample-data/downloads/multislice-mri/` (git-ignored, ~3 MB total). Unlike the other two samples, this one is uploaded to Orthanc as a real multi-instance series:
+
+```bash
+./scripts/upload-multislice-series-to-orthanc.sh
+```
+
+Since every slice shares the same `StudyInstanceUID` and `SeriesInstanceUID`, Orthanc groups all 15 into one study with one series automatically. See `docs/local-stack.md` for how the rest of the pipeline (anonymize, preview, upload to MinIO, and slice navigation in the dashboard) handles this series.

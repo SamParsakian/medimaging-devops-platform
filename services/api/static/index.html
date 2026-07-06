@@ -102,6 +102,38 @@
       border-radius: 4px;
     }
 
+    .slice-viewer {
+      margin-top: 1rem;
+    }
+
+    .slice-controls {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-top: 0.5rem;
+    }
+
+    .slice-controls button {
+      padding: 0.3rem 0.7rem;
+      cursor: pointer;
+    }
+
+    .slice-controls button:disabled {
+      cursor: default;
+      opacity: 0.5;
+    }
+
+    .slice-controls input[type="range"] {
+      flex: 1;
+    }
+
+    .slice-label {
+      font-size: 0.85rem;
+      color: #555;
+      min-width: 6.5rem;
+      text-align: right;
+    }
+
     .badge {
       display: inline-block;
       padding: 0.1rem 0.5rem;
@@ -259,17 +291,81 @@
       }
     }
 
+    // Slice navigation state for the study currently open in the detail
+    // panel - only used when that study has more than one slice preview.
+    let currentSlices = [];
+    let currentSliceIndex = 0;
+
+    function sliceImageUrl(studyId, sliceIndex) {
+      return withApiKey(`/studies/${studyId}/slices/${sliceIndex}/preview-image`);
+    }
+
+    function updateSliceView(studyId) {
+      const slice = currentSlices[currentSliceIndex];
+      document.getElementById("slice-image").src = sliceImageUrl(studyId, slice.slice_index);
+      document.getElementById("slice-label").textContent =
+        `Slice ${currentSliceIndex + 1} of ${currentSlices.length} (instance ${slice.instance_number})`;
+      document.getElementById("slice-slider").value = currentSliceIndex;
+      document.getElementById("slice-prev").disabled = currentSliceIndex === 0;
+      document.getElementById("slice-next").disabled = currentSliceIndex === currentSlices.length - 1;
+    }
+
+    function setupSliceViewer(studyId, slices) {
+      currentSlices = slices;
+      // Start in the middle of the series rather than at slice 0, since
+      // the first and last slices of a real scan are often the least
+      // recognizable (edge of the anatomy, not the center of it).
+      currentSliceIndex = Math.floor(slices.length / 2);
+
+      document.getElementById("slice-prev").addEventListener("click", () => {
+        if (currentSliceIndex > 0) {
+          currentSliceIndex -= 1;
+          updateSliceView(studyId);
+        }
+      });
+      document.getElementById("slice-next").addEventListener("click", () => {
+        if (currentSliceIndex < currentSlices.length - 1) {
+          currentSliceIndex += 1;
+          updateSliceView(studyId);
+        }
+      });
+      document.getElementById("slice-slider").addEventListener("input", (event) => {
+        currentSliceIndex = Number(event.target.value);
+        updateSliceView(studyId);
+      });
+
+      updateSliceView(studyId);
+    }
+
     async function loadStudyDetail(studyId) {
-      const [study, previewInfo] = await Promise.all([
+      const [study, previewInfo, slices] = await Promise.all([
         apiFetch(`/studies/${studyId}`).then((r) => r.json()),
         apiFetch(`/studies/${studyId}/preview-info`).then((r) => r.json()),
+        apiFetch(`/studies/${studyId}/slices`).then((r) => r.json()),
       ]);
 
-      // <img> can't send a custom header, so the preview image is authenticated
-      // via the api_key query parameter instead of X-API-Key.
-      const previewBlock = previewInfo.available
-        ? `<img class="preview-image" src="${withApiKey(`/studies/${studyId}/preview-image`)}" alt="Study preview" />`
-        : `<p class="placeholder">No preview available for this study.</p>`;
+      // A study with registered slices gets Previous/Next/slider
+      // navigation instead of the single static preview image. <img>
+      // can't send a custom header, so both kinds of preview image are
+      // authenticated via the api_key query parameter instead of X-API-Key.
+      let previewBlock;
+      if (slices.length > 0) {
+        previewBlock = `
+          <div class="slice-viewer">
+            <img class="preview-image" id="slice-image" alt="Study slice preview" />
+            <div class="slice-controls">
+              <button id="slice-prev" type="button">&larr; Prev</button>
+              <input type="range" id="slice-slider" min="0" max="${slices.length - 1}" value="0" />
+              <button id="slice-next" type="button">Next &rarr;</button>
+              <span class="slice-label" id="slice-label"></span>
+            </div>
+          </div>
+        `;
+      } else if (previewInfo.available) {
+        previewBlock = `<img class="preview-image" src="${withApiKey(`/studies/${studyId}/preview-image`)}" alt="Study preview" />`;
+      } else {
+        previewBlock = `<p class="placeholder">No preview available for this study.</p>`;
+      }
 
       const errorRow = study.last_error
         ? `<tr><th>Last Error</th><td class="error-text">${study.last_error}</td></tr>`
@@ -294,6 +390,10 @@
         </table>
         ${previewBlock}
       `;
+
+      if (slices.length > 0) {
+        setupSliceViewer(studyId, slices);
+      }
 
       loadAuditEvents();
     }

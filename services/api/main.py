@@ -286,6 +286,22 @@ def get_preview_info(study_id: str, request: Request):
     }
 
 
+def stream_minio_object(object_path):
+    """Streams one object's bytes straight from MinIO, so a caller never
+    needs direct MinIO access or credentials - the bucket stays private."""
+    client = get_minio_client()
+    response = client.get_object(MINIO_BUCKET, object_path)
+
+    def iter_content():
+        try:
+            yield from response.stream(32 * 1024)
+        finally:
+            response.close()
+            response.release_conn()
+
+    return StreamingResponse(iter_content(), media_type="image/png")
+
+
 @app.get("/studies/{study_id}/preview-image")
 def get_preview_image(study_id: str, request: Request):
     """Streams the preview PNG from MinIO, so the dashboard (or any
@@ -302,23 +318,85 @@ def get_preview_image(study_id: str, request: Request):
         log_audit_event(request, "view_preview_image", study_id, "not_found")
         raise HTTPException(status_code=404, detail="No preview available for this study")
 
-    client = get_minio_client()
     try:
-        response = client.get_object(MINIO_BUCKET, object_path)
+        result = stream_minio_object(object_path)
     except S3Error as exc:
         log_audit_event(request, "view_preview_image", study_id, "not_found")
         raise HTTPException(status_code=404, detail="Preview object not found in MinIO") from exc
 
     log_audit_event(request, "view_preview_image", study_id, "success")
+    return result
 
-    def iter_content():
-        try:
-            yield from response.stream(32 * 1024)
-        finally:
-            response.close()
-            response.release_conn()
 
-    return StreamingResponse(iter_content(), media_type="image/png")
+@app.get("/studies/{study_id}/slices")
+def list_slices(study_id: str, request: Request):
+    """Ordered list of slice previews for a multi-slice series (Step 18).
+    Empty for studies that only have the one whole-study preview."""
+    try:
+        fetch_study(study_id)
+    except HTTPException:
+        log_audit_event(request, "list_slices", study_id, "not_found")
+        raise
+
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT slice_index, instance_number, preview_object_path
+                FROM study_slices
+                WHERE orthanc_study_id = %s
+                ORDER BY slice_index
+                """,
+                (study_id,),
+            )
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    log_audit_event(request, "list_slices", study_id, "success")
+    return [
+        {"slice_index": row[0], "instance_number": row[1], "preview_object_path": row[2]}
+        for row in rows
+    ]
+
+
+@app.get("/studies/{study_id}/slices/{slice_index}/preview-image")
+def get_slice_preview_image(study_id: str, slice_index: int, request: Request):
+    """Streams one slice's preview PNG from MinIO, the same way
+    /preview-image does for a study's single whole-study preview."""
+    try:
+        fetch_study(study_id)
+    except HTTPException:
+        log_audit_event(request, "view_slice_preview_image", study_id, "not_found")
+        raise
+
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT preview_object_path FROM study_slices
+                WHERE orthanc_study_id = %s AND slice_index = %s
+                """,
+                (study_id, slice_index),
+            )
+            row = cur.fetchone()
+    finally:
+        conn.close()
+
+    if row is None:
+        log_audit_event(request, "view_slice_preview_image", study_id, "not_found")
+        raise HTTPException(status_code=404, detail="Slice not found for this study")
+
+    try:
+        result = stream_minio_object(row[0])
+    except S3Error as exc:
+        log_audit_event(request, "view_slice_preview_image", study_id, "not_found")
+        raise HTTPException(status_code=404, detail="Preview object not found in MinIO") from exc
+
+    log_audit_event(request, "view_slice_preview_image", study_id, "success")
+    return result
 
 
 @app.get("/audit-events")
