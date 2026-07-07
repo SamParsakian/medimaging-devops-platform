@@ -383,3 +383,12 @@ Adding a real machine learning library also has a visible cost. The ai-inference
 
 Four new pytest tests cover the stat/X-ray dispatch logic directly: `run_stat_inference`'s output shape, and `run_inference` falling back correctly when the X-ray model isn't loaded. That's always true for a plain import, since model loading only happens through the app's real startup, never at import time - so these tests need no torch model and stay fast.
 
+Two real snags came up while wiring the model into the service, worth knowing about since they're the kind of thing anyone integrating a newer library version can run into:
+
+- FastAPI removed its older way of running startup code in the version this project uses - `app.on_event("startup")` and the underlying `add_event_handler` method are both gone. The fix was switching to FastAPI's current approach instead: a `lifespan` function that runs `load_xray_model()` once when the app actually starts, not when the file is merely imported.
+- A logging call accidentally passed the same argument twice - once by position, once by name. Python treats that as an error rather than picking one, so removing the duplicate fixed it.
+
+Neither changed how the finished feature behaves - both were caught and fixed before this step was verified end to end.
+
+The same library also slowed down CI. The GitHub Actions check that runs on every push used to finish in about 30 seconds. It now takes about a minute and a half, since it has to install PyTorch and TorchXRayVision every time. Still fast enough not to be a problem, just worth knowing why it grew.
+
