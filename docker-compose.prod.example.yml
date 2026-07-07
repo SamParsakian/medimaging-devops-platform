@@ -1,0 +1,43 @@
+# Example production override - not deployed anywhere yet.
+#
+# Layered on top of the base docker-compose.yml, not a replacement for it:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.example.yml \
+#     --env-file .env.production up -d --build
+#
+# Copy this file to docker-compose.prod.yml (git-ignored, same pattern as
+# .env vs .env.example) once there's a real server to point it at.
+#
+# What this file deliberately does NOT try to do: remove or change which
+# ports docker-compose.yml already publishes. Docker Compose merges the
+# "ports" list across files by appending to it, not replacing it - there is
+# no override syntax that unpublishes a port the base file already defines.
+# Tested directly with `docker compose config` while writing this file: an
+# override that tried `ports: []` left every base port untouched, and one
+# that tried rebinding "api" to 127.0.0.1 ended up with *both* the original
+# 0.0.0.0 binding and the new 127.0.0.1 one active at the same time - not a
+# real restriction. Closing those ports to the public internet has to
+# happen at the host or cloud firewall instead (see docs/deployment.md's
+# "Firewall ports" section) - Compose overrides are the wrong tool for it.
+
+services:
+  orthanc:
+    restart: always
+
+  postgres:
+    restart: always
+
+  minio:
+    restart: always
+
+  api:
+    restart: always
+
+  ai-inference:
+    restart: always
+
+  prometheus:
+    restart: always
+
+  grafana:
+    restart: always
