@@ -290,7 +290,15 @@ Mass, Hernia, Lung Lesion, Fracture, Lung Opacity, Enlarged Cardiomediastinum
 
 Up to this point, settings like the model name, input size, and number of findings to show were just separate constants sitting inside `main.py`. That was fine with only a few of them, but harder to follow as more model-related values piled up.
 
-This step moves all of them into one dedicated file, `services/ai-inference/model_config.py`. Anyone reading the project can now find the model's whole configuration in one place: which weights it uses and where they come from, how the input image gets prepared, how many findings to show, a documented confidence threshold, which hardware it runs on, and a rule the heatmap feature (built next, in Step 25) will follow.
+This step moves all of them into one dedicated file, `services/ai-inference/model_config.py`. Anyone reading the project can now find the model's whole configuration in one place: which weights it uses and where they come from, how the input image gets prepared, how many findings to show, a documented confidence threshold, which hardware it runs on, and a rule the heatmap feature (built next, in Step 25) will follow. The exact values:
+
+```text
+Preprocessing:         grayscale -> normalize to [-1024, 1024] -> center-crop -> resize to 224x224
+Top findings shown:    5
+Confidence threshold:  0.5 (a finding scored at or above this is treated as a possible finding, not a diagnosis)
+Runtime mode:          cpu
+Heatmap target rule:   top_finding (used starting in Step 25)
+```
 
 The running service exposes all of this over HTTP:
 
@@ -396,7 +404,7 @@ The same library also slowed down CI. The GitHub Actions check that runs on ever
 
 In this step, every X-ray inference result started coming with a heatmap image alongside it.
 
-A probability number alone doesn't answer an obvious question: which part of the image actually made the model say that? A heatmap answers it directly, by lighting up the exact area the model weighted most heavily for its top finding.
+A probability number alone doesn't answer an obvious question: which part of the image actually made the model say that? A heatmap answers it directly, by lighting up the exact area the model weighted most heavily for one specific finding - which finding is controlled by `model_config.py`'s `heatmap_target_rule`, set to `top_finding`. In practice that means the heatmap is always built for whichever finding scored highest, not a fixed or manually chosen one - a different config value later could point it at a different finding without any code change here.
 
 There are two well-known ways to build this kind of heatmap for a CNN (a convolutional neural network - the type of model used here, which scans an image in small overlapping patches rather than all at once). The newer, more general technique is called Grad-CAM. There's also an older, simpler technique it grew out of, called plain CAM (Class Activation Mapping). CAM only works if a network's last few layers are built a specific way - and TorchXRayVision's DenseNet happens to be built exactly that way.
 
