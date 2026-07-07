@@ -64,6 +64,11 @@ CREATE TABLE IF NOT EXISTS study_slices (
 -- the model's top labeled probabilities as a JSON array - null for
 -- older stat-only rows, which only ever had a single label.
 
+-- heatmap_object was added in Step 25: the MinIO path of a Class
+-- Activation Mapping heatmap image for the row's top finding, null for
+-- stat-mode rows and for any X-ray row where heatmap generation itself
+-- failed (the actual finding result is kept either way).
+
 CREATE TABLE IF NOT EXISTS ai_results (
     result_id SERIAL PRIMARY KEY,
     orthanc_study_id TEXT NOT NULL,
@@ -76,5 +81,6 @@ CREATE TABLE IF NOT EXISTS ai_results (
     disclaimer TEXT NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     mode TEXT,
-    findings JSONB
+    findings JSONB,
+    heatmap_object TEXT
 );
