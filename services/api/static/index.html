@@ -219,6 +219,43 @@
       font-size: 0.8rem;
       font-style: italic;
     }
+
+    .evaluation {
+      background: #fff;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      padding: 1rem 1.25rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .evaluation-summary {
+      max-width: 640px;
+      margin-bottom: 1rem;
+    }
+
+    .heatmap-thumb {
+      width: 64px;
+      height: 64px;
+      object-fit: cover;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      display: block;
+    }
+
+    .badge.match {
+      background: #e3f7e8;
+      color: #1a7a34;
+    }
+
+    .badge.review_needed {
+      background: #fff6dd;
+      color: #8a6a00;
+    }
+
+    .badge.mismatch {
+      background: #fbe4e4;
+      color: #a3242a;
+    }
   </style>
 </head>
 <body>
@@ -231,6 +268,30 @@
     <h2>AI Model Configuration</h2>
     <table class="detail-table" id="model-config-table">
       <tr><td colspan="2">Loading model configuration...</td></tr>
+    </table>
+  </section>
+
+  <section class="evaluation">
+    <h2>X-ray Model Evaluation</h2>
+    <table class="detail-table evaluation-summary" id="evaluation-summary-table">
+      <tr><td colspan="2">Loading evaluation summary...</td></tr>
+    </table>
+    <table id="evaluation-samples-table">
+      <thead>
+        <tr>
+          <th>Sample</th>
+          <th>Expected</th>
+          <th>Top Finding</th>
+          <th>Confidence</th>
+          <th>Bucket</th>
+          <th>Flag</th>
+          <th>Inference Time</th>
+          <th>Heatmap</th>
+        </tr>
+      </thead>
+      <tbody id="evaluation-samples-body">
+        <tr><td colspan="8">Loading evaluation samples...</td></tr>
+      </tbody>
     </table>
   </section>
 
@@ -335,6 +396,61 @@
         `;
       } catch (err) {
         table.innerHTML = `<tr><td colspan="2" class="error-text">Could not reach the API.</td></tr>`;
+      }
+    }
+
+    function evaluationBadge(status) {
+      const cls = status === "match" ? "match" : status === "review_needed" ? "review_needed" : "mismatch";
+      const label = status === "match" ? "Match" : status === "review_needed" ? "Review" : "Mismatch";
+      return `<span class="badge ${cls}">${label}</span>`;
+    }
+
+    async function loadEvaluation() {
+      const summaryTable = document.getElementById("evaluation-summary-table");
+      const samplesBody = document.getElementById("evaluation-samples-body");
+      try {
+        const [summary, samples] = await Promise.all([
+          apiFetch("/evaluation/summary").then((r) => r.json()),
+          apiFetch("/evaluation/samples").then((r) => r.json()),
+        ]);
+
+        if (summary.total_samples === 0) {
+          summaryTable.innerHTML =
+            `<tr><td colspan="2">No evaluation run yet - run evaluation/run_evaluation.py against the live stack.</td></tr>`;
+        } else {
+          summaryTable.innerHTML = `
+            <tr><th>Total Samples</th><td>${summary.total_samples}</td></tr>
+            <tr><th>Normal / Abnormal</th><td>${summary.normal_count} / ${summary.abnormal_count}</td></tr>
+            <tr><th>Match / Review / Mismatch</th><td>${summary.match_count} / ${summary.review_needed_count} / ${summary.mismatch_count}</td></tr>
+            <tr><th>Average Inference Time</th><td>${summary.average_inference_time_ms} ms</td></tr>
+            <tr><th>Threshold Used</th><td>${summary.threshold_used}</td></tr>
+          `;
+        }
+
+        samplesBody.innerHTML = "";
+        for (const sample of samples) {
+          const row = document.createElement("tr");
+          const confidenceText = sample.top_confidence != null
+            ? `${(sample.top_confidence * 100).toFixed(1)}%`
+            : "";
+          const heatmapCell = sample.ai_result_id
+            ? `<img class="heatmap-thumb" src="${withApiKey(`/studies/${sample.orthanc_study_id}/ai-results/${sample.ai_result_id}/heatmap-image`)}" alt="Heatmap for ${sample.sample_id}" />`
+            : "n/a";
+          row.innerHTML = `
+            <td>${sample.sample_id}</td>
+            <td>${sample.expected_label} (${sample.expected_group})</td>
+            <td>${sample.top_finding ?? ""}</td>
+            <td>${confidenceText}</td>
+            <td>${sample.confidence_bucket ?? ""}</td>
+            <td>${evaluationBadge(sample.match_status)}</td>
+            <td>${sample.inference_time_ms ?? ""} ms</td>
+            <td>${heatmapCell}</td>
+          `;
+          samplesBody.appendChild(row);
+        }
+      } catch (err) {
+        summaryTable.innerHTML = `<tr><td colspan="2" class="error-text">Could not load evaluation data.</td></tr>`;
+        samplesBody.innerHTML = `<tr><td colspan="8" class="error-text">Could not load evaluation data.</td></tr>`;
       }
     }
 
@@ -554,6 +670,7 @@
     }
 
     loadModelConfig();
+    loadEvaluation();
     loadStudies();
   </script>
 </body>

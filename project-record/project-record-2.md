@@ -458,3 +458,174 @@ Opening one of the files inside confirms it's a real, viewable image - the same 
 `POST /studies/{id}/infer` now returns the new row's `result_id` directly in its own response (`store_ai_result` uses `RETURNING result_id`). That's what lets the dashboard build a heatmap URL immediately after a fresh run, not only for a result it loads later.
 
 Four new pytest tests cover `compute_cam`, `apply_colormap`, and `build_heatmap_overlay` directly against small synthetic arrays - pure math and image blending, no torch model needed for any of it.
+
+## Step 26 - X-ray Model Evaluation Workflow
+
+In this step, the X-ray AI model was run against a batch of 24 labeled chest X-ray images at once, and its answers were checked against the real, known label for each one - instead of the single-image checks every earlier AI step relied on. A model can look convincing on one or two hand-picked images and still be wrong most of the time; the only way to find out is to run it against a set of images whose real answers are already known, and count how often it agrees.
+
+### Finding a proper source of labeled samples
+
+Steps 24 and 25 only ever used two chest X-rays, both mirrored directly from the model library's own test files. That was enough to prove the model runs, but nowhere near enough to measure how good it actually is - two images can't show a pattern, only an anecdote. Getting to 24 balanced, individually labeled images meant finding a source that could offer that many, with trustworthy ground truth attached to each one.
+
+The dataset used is Kaggle's own hosted copy of the NIH's official 5% sample release of the full ChestX-ray14 dataset (`nih-chest-xrays/sample`), CC0 (public domain) licensed:
+
+![Kaggle dataset page for "Random Sample of NIH Chest X-ray Dataset", showing the title, "5,606 images and labels sampled from the NIH Chest X-ray Dataset," the CC0: Public Domain license, and a live preview of sample_labels.csv with real Image Index / Finding Labels / Patient ID rows](images/step-26-kaggle-dataset-license-page.png)
+
+Downloading from Kaggle's API needs an account and an API token, unlike every other sample source used so far in this project (which were all plain, unauthenticated downloads). A token was generated specifically for this project, named so it's clear what it's for:
+
+![Kaggle Settings > API Tokens page, showing a new token being created with the name "medimaging-devops-platform"](images/step-26-kaggle-api-token-page.png)
+
+### Picking 24 balanced samples
+
+The dataset's own `sample_labels.csv` lists every image's `Finding Labels` and `Patient ID`. 24 rows were picked out of the full 5,606 using a small one-off selection script (not committed - its output is what became the manifest below): 12 images labeled exactly `No Finding`, and 12 images each labeled with exactly one abnormal finding, covering 12 different findings rather than repeating the same one:
+
+```text
+Infiltration, Effusion, Atelectasis, Nodule, Pneumothorax, Mass,
+Consolidation, Pleural_Thickening, Cardiomegaly, Emphysema, Edema, Pneumonia
+```
+
+Every one of the 24 comes from a different patient, so the set isn't accidentally weighted toward one person's anatomy or imaging equipment. The result is a tracked manifest, `evaluation/manifest.csv`, with one row per sample:
+
+```text
+sample_id, source_filename, expected_label, expected_group, local_path, reason_selected
+```
+
+The first few rows look like this:
+
+```text
+xray-eval-abnormal-01,00000181_017.png,Infiltration,abnormal,sample-data/downloads/xray-eval/00000181_017.png,"single clear finding (Infiltration), chosen to cover a distinct pathology not already represented in this set"
+xray-eval-abnormal-02,00000061_002.png,Effusion,abnormal,sample-data/downloads/xray-eval/00000061_002.png,"single clear finding (Effusion), chosen to cover a distinct pathology not already represented in this set"
+xray-eval-normal-01,00000017_001.png,No Finding,normal,sample-data/downloads/xray-eval/00000017_001.png,"labeled No Finding, chosen from a different patient than every other sample in this set"
+```
+
+The 24 image files themselves are not committed (same rule as every other sample in this project - see `docs/sample-data.md`), only the manifest that describes them. A new script downloads them on demand, one file at a time by name, using the Kaggle CLI and the token above:
+
+```bash
+./scripts/download-xray-evaluation-set.sh
+```
+
+### The batch evaluation script
+
+A new `evaluation/run_evaluation.py` reads the manifest, registers each of the 24 images as its own study (the same pattern `register_xray_samples.py` already used for the original two samples), then calls the API's own `POST /studies/{id}/infer` for each one - the same endpoint the dashboard's "Run AI Demo Inference" button uses. That single call already runs the real model, builds a heatmap, uploads it to MinIO, and stores a row in `ai_results`; this script's only new job is judging that result against the sample's known label.
+
+Two match rules, one for each group, decide whether a result counts as a match:
+
+```python
+def judge(row, result, threshold):
+    probabilities = result.get("finding_probabilities") or {}
+    top_findings = [f["label"] for f in result.get("top_findings", [])]
+
+    if row["expected_group"] == "abnormal":
+        expected_prob = probabilities.get(row["expected_label"])
+        in_top_k = row["expected_label"] in top_findings
+        above_threshold = expected_prob is not None and expected_prob >= threshold
+        deciding_prob = expected_prob
+        is_match = in_top_k or above_threshold
+    else:
+        deciding_prob = max(probabilities.values()) if probabilities else None
+        is_match = deciding_prob is not None and deciding_prob < threshold
+
+    if is_match:
+        return "match", deciding_prob
+    if deciding_prob is not None and abs(deciding_prob - threshold) <= REVIEW_BAND:
+        return "review_needed", deciding_prob
+    return "mismatch", deciding_prob
+```
+
+An abnormal sample matches if its expected finding shows up anywhere in the model's top 5 answers, or its own probability clears the 0.5 threshold already established in `docs/ai-model-config.md` - either is a real catch. A normal sample matches only if nothing at all clears that same threshold. A third outcome, `review_needed`, catches results sitting within 0.05 of the threshold either way - genuinely borderline calls that shouldn't be forced into a clean match or a clean miss.
+
+A new table stores one row per sample per run:
+
+```sql
+CREATE TABLE IF NOT EXISTS xray_evaluation_results (
+    id SERIAL PRIMARY KEY,
+    sample_id TEXT NOT NULL,
+    orthanc_study_id TEXT NOT NULL,
+    ai_result_id INTEGER,
+    expected_label TEXT NOT NULL,
+    expected_group TEXT NOT NULL,
+    top_finding TEXT,
+    top_confidence DOUBLE PRECISION,
+    confidence_bucket TEXT,
+    match_status TEXT NOT NULL,
+    inference_time_ms DOUBLE PRECISION,
+    threshold_used DOUBLE PRECISION NOT NULL,
+    finding_probabilities JSONB,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+```
+
+`finding_probabilities` keeps all 18 of the model's raw scores for every sample, not just its top 5 - that's what lets the threshold sensitivity check below re-judge every result at other thresholds without calling the model again.
+
+### Running it for real
+
+With the stack up, the script was run from the repo root:
+
+```bash
+python3 evaluation/run_evaluation.py
+```
+
+Each of the 24 samples gets registered and judged one at a time, ending in the summary and threshold sensitivity numbers discussed below:
+
+![Terminal running evaluation/run_evaluation.py from start to finish: all 24 "Registered ... -> expected=... top_finding=... confidence=... -> match/mismatch/review_needed" lines, followed by the Evaluation summary block (24 total, 12/12, 10 match, 7 review needed, 7 mismatch, 137.5 ms average) and the Threshold sensitivity table (0.5/0.6/0.7), ending in "Done. Evaluated 24 sample(s)."](images/step-26-evaluation-run-terminal.png)
+
+### What the results actually showed
+
+At the project's existing 0.5 threshold, 10 of the 24 samples matched, 7 needed review, and 7 were clean mismatches:
+
+```text
+=== Evaluation summary (threshold = 0.5) ===
+Total samples:   24
+Normal:          12
+Abnormal:        12
+Match:           10
+Review needed:   7
+Mismatch:        7
+
+Average inference time: 140.4 ms
+```
+
+10 of the 12 abnormal samples matched, including one, `Nodule`, that only matched because it showed up in the top 5 rather than clearing the threshold on its own (its own probability was 0.33) - a real example of why the top-5 half of the match rule matters, the same way a radiologist's differential list includes runner-up possibilities, not only the single most likely one. The two abnormal samples that did not match, `Pleural_Thickening` and `Pneumonia`, were not borderline calls: the model's own probability for each expected finding was 0.20 and 0.002, genuinely low rather than close to the line.
+
+The normal samples are where the model's real weak spot shows up: only 3 of the 12 "No Finding" images cleanly matched. On most of the rest, the model's own top call landed at or just past the 0.5 threshold anyway (a cluster of "Infiltration" and "Lung Opacity" calls around 0.50-0.57), meaning this model, with no further adjustment, leans toward flagging something even on a healthy-looking image more often than it stays quiet. The full breakdown and discussion is in `docs/ai-evaluation-notes.md`, written specifically so this result is stated plainly rather than glossed over.
+
+The same 24 stored results were then re-judged at two other thresholds, using the probabilities already saved rather than running inference again:
+
+```text
+=== Threshold sensitivity (recomputed from stored probabilities) ===
+ threshold   match   review   mismatch
+       0.5      10        7          7
+       0.6      16        2          6
+       0.7      18        0          6
+```
+
+0.5 (the threshold already established for the live model back in Step 24) was kept as the number used everywhere else in this step, even though 0.7 makes the summary look better on its face - moving the threshold mostly reclassifies borderline normal-sample calls from "review needed" into "match," it does not change the two genuine abnormal misses, which stay mismatched at every threshold tried. Picking whichever threshold produced the best-looking summary would have hidden the model's actual weak spot instead of reporting it honestly.
+
+### Dashboard and storage
+
+Two new endpoints expose this data:
+
+```text
+GET /evaluation/summary
+GET /evaluation/samples
+```
+
+The dashboard's existing "AI Model Configuration" panel stays exactly where it was; a new "X-ray Model Evaluation" panel sits directly under it, showing the same summary numbers above, and a full table below with every sample's expected label, top finding, confidence, bucket, match/review/mismatch flag, inference time, and a small heatmap thumbnail:
+
+![Dashboard showing the AI Model Configuration panel unchanged at the top, and directly below it the new X-ray Model Evaluation panel: Total Samples 24, Normal/Abnormal 12/12, Match/Review/Mismatch 10/7/7, Average Inference Time, Threshold Used 0.5, and the start of the sample table with heatmap thumbnails](images/step-26-dashboard-evaluation-top.png)
+
+Scrolling through the same table shows every one of the 24 rows, with the green Match, red Mismatch, and yellow Review badges all visible side by side - including the normal samples' weak spot discussed above, not just the wins:
+
+![The full X-ray Model Evaluation table, all 24 sample rows visible, showing a mix of green Match, red Mismatch, and yellow Review badges with their heatmap thumbnails, including several "No Finding" rows flagged Mismatch or Review](images/step-26-dashboard-evaluation-full-table.png)
+
+Every evaluation row shown above is a real row in Postgres, queried directly:
+
+![Terminal running an expanded psql SELECT against xray_evaluation_results for all 24 samples, showing sample_id, expected_label, top_finding, top_confidence, and match_status columns matching the dashboard exactly, ending "(24 rows)"](images/step-26-evaluation-db-rows.png)
+
+And every heatmap thumbnail shown above is a real object in MinIO's `heatmaps/` folder, not just a path string - the object browser lists all of them, with one open in a preview popup:
+
+![MinIO Console Object Browser showing the medimaging bucket's heatmaps/ folder with many PNG files listed (two per sample, from repeated runs), and a preview popup open showing one heatmap glowing red/yellow over the chest](images/step-26-minio-heatmaps.png)
+
+Seven new pytest tests cover the `judge()` match rules and `confidence_bucket()` directly, using small hand-built result dictionaries rather than a live model or database - the abnormal top-k-vs-threshold case, a clean abnormal miss, a normal match, a normal false-positive-style mismatch, and a borderline review-needed case are all covered on their own, along with the bucket boundaries. `evaluation/` also got its own line in the CI workflow, so its dependencies are installed and its files are syntax-checked the same way every service already is.
+
+Nothing about how a single, live inference request behaves changed in this step - the same `POST /studies/{id}/infer` endpoint, the same heatmap generation, the same `ai_results` storage from Steps 21-25 all work exactly as before. This step only adds a batch way of running that same path 24 times and keeping score.

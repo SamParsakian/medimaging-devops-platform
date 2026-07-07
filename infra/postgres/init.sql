@@ -84,3 +84,29 @@ CREATE TABLE IF NOT EXISTS ai_results (
     findings JSONB,
     heatmap_object TEXT
 );
+
+-- One row per sample in a batch evaluation run (see evaluation/manifest.csv
+-- and evaluation/run_evaluation.py). Each row links a known-label sample back
+-- to the ai_results row its inference produced, plus the evaluation-specific
+-- judgment (did the model's output match the expected label, at the
+-- threshold in use at the time). finding_probabilities holds all 18 of the
+-- X-ray model's raw scores (not just the top 5 in ai_results.findings), so a
+-- threshold sensitivity check can be re-run later without calling the model
+-- again.
+
+CREATE TABLE IF NOT EXISTS xray_evaluation_results (
+    id SERIAL PRIMARY KEY,
+    sample_id TEXT NOT NULL,
+    orthanc_study_id TEXT NOT NULL,
+    ai_result_id INTEGER,
+    expected_label TEXT NOT NULL,
+    expected_group TEXT NOT NULL,
+    top_finding TEXT,
+    top_confidence DOUBLE PRECISION,
+    confidence_bucket TEXT,
+    match_status TEXT NOT NULL,
+    inference_time_ms DOUBLE PRECISION,
+    threshold_used DOUBLE PRECISION NOT NULL,
+    finding_probabilities JSONB,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);

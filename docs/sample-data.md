@@ -82,3 +82,20 @@ Downloaded with:
 ```
 
 This saves both files to `sample-data/downloads/xray/` (git-ignored). See `docs/local-stack.md` for how the ai-inference service uses them.
+
+## Sixth source: a balanced 24-image evaluation set
+
+Step 26 needed enough labeled images to evaluate the model properly, not just look at one or two results by eye - 24 chest X-rays, 12 labeled "No Finding" and 12 each with one single, distinct abnormal finding (Infiltration, Effusion, Atelectasis, Nodule, Pneumothorax, Mass, Consolidation, Pleural_Thickening, Cardiomegaly, Emphysema, Edema, Pneumonia). The two samples above aren't enough for that on their own.
+
+- Source: [Kaggle's "Random Sample of NIH Chest X-ray Dataset"](https://www.kaggle.com/datasets/nih-chest-xrays/sample) (`nih-chest-xrays/sample`) - NIH's own official 5% sample release of the full ChestX-ray14 dataset (5,606 images), re-hosted on Kaggle with its own `sample_labels.csv` ground-truth file.
+- License: CC0: Public Domain, shown directly on the dataset page.
+- Each of the 24 images was picked by matching against `sample_labels.csv`: the 12 abnormal picks are each the only sample carrying that single finding label (no other finding mixed in, so the expected answer is unambiguous) from a patient not already used elsewhere in the set; the 12 normal picks are "No Finding" images spread across the label file so no two come from the same patient. See `evaluation/manifest.csv` for the exact 24 filenames, expected labels, and the reason each one was picked.
+- Downloading requires a (free) Kaggle account and API token, unlike every other sample above - Kaggle's own API requires authentication even for public datasets. See `scripts/download-xray-evaluation-set.sh`.
+
+Downloaded with:
+
+```bash
+./scripts/download-xray-evaluation-set.sh
+```
+
+This saves the 24 images plus a copy of the labels reference file to `sample-data/downloads/xray-eval/` (git-ignored). See `docs/ai-evaluation-notes.md` for how they're used.
