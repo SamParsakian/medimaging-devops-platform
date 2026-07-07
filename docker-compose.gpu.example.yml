@@ -1,0 +1,27 @@
+# Example GPU override - not deployed anywhere yet, and would not work on
+# this machine (no NVIDIA GPU, see docs/gpu-demo-plan.md's nvidia-smi check).
+#
+# A third, optional layer on top of the base file and the production
+# override, only once a real GPU server exists:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.prod.example.yml \
+#     -f docker-compose.gpu.example.yml --env-file .env.production up -d --build
+#
+# This only requests GPU access for ai-inference through Compose's own
+# device-reservation syntax. It does NOT switch services/ai-inference's
+# Dockerfile to CUDA-enabled torch/torchvision wheels, and does not add any
+# .to("cuda") call to services/ai-inference/main.py - both are real code
+# changes that need an actual GPU to test against (see docs/gpu-demo-plan.md's
+# "CPU mode vs GPU mode" section), not something to write blind. Using this
+# file today, with no GPU present and no NVIDIA Container Toolkit installed,
+# would fail to start ai-inference - that's expected, not a bug.
+
+services:
+  ai-inference:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: ["gpu"]

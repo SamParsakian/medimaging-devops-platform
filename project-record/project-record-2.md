@@ -629,3 +629,64 @@ And every heatmap thumbnail shown above is a real object in MinIO's `heatmaps/` 
 Seven new pytest tests cover the `judge()` match rules and `confidence_bucket()` directly, using small hand-built result dictionaries rather than a live model or database - the abnormal top-k-vs-threshold case, a clean abnormal miss, a normal match, a normal false-positive-style mismatch, and a borderline review-needed case are all covered on their own, along with the bucket boundaries. `evaluation/` also got its own line in the CI workflow, so its dependencies are installed and its files are syntax-checked the same way every service already is.
 
 Nothing about how a single, live inference request behaves changed in this step - the same `POST /studies/{id}/infer` endpoint, the same heatmap generation, the same `ai_results` storage from Steps 21-25 all work exactly as before. This step only adds a batch way of running that same path 24 times and keeping score.
+
+## Step 27 - Getting Ready to Deploy
+
+In this step, a plan was written down for moving this stack off this Mac and onto a rented server with a GPU - what that would actually take, without renting anything or deploying anything yet.
+
+Step 26 was the first time this project actually measured how good the AI model is - 10 of 24 samples matched, with a real weak spot showing up in the results. That's why this step comes right after it: it made sense to understand the model's real behavior before spending money on a GPU server to run it.
+
+Two new docs cover the plan. `docs/deployment.md` covers everything that isn't GPU-specific:
+
+```text
+Docker Compose deployment flow
+Persistent volumes
+Model weight/cache handling
+Backup before deployment
+Restore check after deployment
+Firewall ports
+Reverse proxy / HTTPS plan
+Secrets handling
+Public demo limitations
+```
+
+`docs/gpu-demo-plan.md` covers the GPU-specific half on its own, since the rest of the stack (Orthanc, Postgres, MinIO, the API, monitoring) never needs a GPU regardless of what happens with `ai-inference`:
+
+```text
+Local Mac ARM64 vs cloud GPU amd64 difference
+CPU mode vs GPU mode for ai-inference
+NVIDIA Container Toolkit requirement
+nvidia-smi check
+Docker Compose deployment flow (GPU)
+Expected VPS/GPU resource table
+```
+
+The architecture difference is a real, checkable fact, not a guess - this Mac's own Docker reports its actual platform:
+
+```text
+$ uname -m
+arm64
+
+$ docker info --format '{{.OSType}}/{{.Architecture}}'
+linux/aarch64
+```
+
+Every image built here so far is arm64. A rented GPU server is almost always amd64/x86_64 instead, so the image would need rebuilding there, not copied over - Docker images are tied to one CPU architecture.
+
+The resource table in `docs/gpu-demo-plan.md` uses real numbers pulled from this Mac's own Docker install (`docker images`, `docker stats`), not estimates - each service's actual built image size and its actual idle memory use, so the plan is grounded in what this stack really costs to run today rather than a guess about what a bigger deployment might need.
+
+Three example files back up the docs, all clearly named so nothing gets mistaken for something already in use:
+
+```text
+.env.production.example
+docker-compose.prod.example.yml
+docker-compose.gpu.example.yml
+```
+
+Writing `docker-compose.prod.example.yml` turned up a real, worth-knowing fact about how Docker Compose actually works: an override file can't unpublish a port the base file already defines. Compose merges the `ports` list across files by appending to it, not replacing it - checked directly with `docker compose config` rather than assumed. An override that tried `ports: []` left every base port exactly as it was; one that tried rebinding the API to `127.0.0.1` ended up with *both* that binding and the original public one active side by side, not a real restriction. Closing a port to the public internet on a real server is a firewall job (the cloud provider's security group, or `ufw`/`iptables` on the host), not something a Compose override file can do on its own - `docs/deployment.md`'s "Firewall ports" section and the compose file's own comments both say so plainly, and the file itself only overrides what Compose actually can change safely (restart policy).
+
+A new script, `scripts/deployment/preflight-check.sh`, is a read-only readiness check - it never deploys or changes anything, only reports what it finds: Docker and Compose versions, host/engine architecture, whether `nvidia-smi` is available, whether `.env.production` exists and still has leftover placeholder values (checked by key name only, never printing an actual secret), whether the two example compose files still parse correctly alongside the base file, and available disk space. Running it on this Mac today, before any server exists, shows exactly the state expected - no GPU, arm64, no production env file yet:
+
+![Terminal running scripts/deployment/preflight-check.sh, showing OK/WARN lines for Docker and Compose versions, arm64 architecture with a warning about cloud GPU servers usually being amd64, nvidia-smi not found, .env.production not existing yet, both example compose files parsing correctly, and available disk space, ending "This is an advisory check only - nothing was deployed or changed."](images/step-27-preflight-check-terminal.png)
+
+Before renting an actual GPU server, the plan calls for: a fresh backup of the current stack (`scripts/backup/backup.sh`), a real `.env.production` with generated secrets that are different from the local demo ones, the NVIDIA Container Toolkit installed and confirmed with `nvidia-smi` on the host itself, and a restore test run on the new server before trusting it with anything - all covered in the two new docs, none of it done yet. No server was rented, nothing was deployed, and no domain or certificate exists - this step is the plan, not the move.
