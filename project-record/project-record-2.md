@@ -275,3 +275,111 @@ The dashboard, the stored `ai_results` rows, and the disclaimer field all still 
 ![Dashboard Study Detail panel for the MR study, showing the stored AI result (Model, Prediction, Confidence, Inference Time) and the disclaimer text, unchanged from Step 22](images/step-23-dashboard-stored-result.png)
 
 Three new pytest tests cover the `InferRequest` validation directly - a normal path is accepted, an empty string is rejected, and a missing field is rejected - no live service needed, following the same pure-logic testing pattern as every other test in this project.
+
+## Step 24 - Real Chest X-ray AI Model
+
+In this step, ai-inference's main path became a real pre-trained model instead of the pixel-statistics classifier from Step 21.
+
+The old pixel-statistics classifier never looked at anatomy - it only measured how much the brightness varied across an image. This step replaces it with [TorchXRayVision](https://github.com/mlmed/torchxrayvision)'s `densenet121-res224-all`, a DenseNet trained specifically on chest X-rays. The model scores each image against 18 real chest findings:
+
+```text
+Atelectasis, Consolidation, Infiltration, Pneumothorax, Edema, Emphysema,
+Fibrosis, Effusion, Pneumonia, Pleural_Thickening, Cardiomegaly, Nodule,
+Mass, Hernia, Lung Lesion, Fracture, Lung Opacity, Enlarged Cardiomediastinum
+```
+
+Up to this point, settings like the model name, input size, and number of findings to show were just separate constants sitting inside `main.py`. That was fine with only a few of them, but harder to follow as more model-related values piled up.
+
+This step moves all of them into one dedicated file, `services/ai-inference/model_config.py`. Anyone reading the project can now find the model's whole configuration in one place: which weights it uses and where they come from, how the input image gets prepared, how many findings to show, a documented confidence threshold, which hardware it runs on, and a rule the heatmap feature (built next, in Step 25) will follow.
+
+The running service exposes all of this over HTTP:
+
+```text
+GET /config      - on ai-inference directly
+GET /ai-config   - the same thing, proxied by the API
+```
+
+It also shows up on the dashboard, in a new "AI Model Configuration" panel at the top of the page:
+
+![Dashboard showing the new "AI Model Configuration" panel above the Studies table, listing X-ray Model, Weights, Source, Input Size, Preprocessing, Top Findings Shown, Confidence Threshold, Heatmap Target Rule, Runtime Mode, and Fallback Model](images/step-24-dashboard-model-config-panel.png)
+
+Two of these settings needed a more careful choice, so instead of just picking one and moving on, both were actually tested and compared - the full write-up is in `docs/ai-model-config.md`, summarized here.
+
+The first choice was which pretrained weights to use. TorchXRayVision ships several, each trained on a different dataset, or combination of datasets. One of them, `nih`, is trained only on the NIH ChestX-ray14 dataset - the same dataset this project's own sample images come from, which makes it sound like the obvious match. The Cardiomegaly sample was run through both:
+
+```text
+weights="nih" (single-dataset, same source as the sample image)
+  Cardiomegaly    0.6672
+  Effusion        0.5665
+  Mass            0.5322
+
+weights="densenet121-res224-all" (multi-dataset, what this project uses)
+  Cardiomegaly    0.6215
+  Fibrosis        0.5402
+  Infiltration    0.5220
+```
+
+Both versions agree on the top finding, Cardiomegaly, which is reassuring - but everything below it differs. A model trained on just one hospital's scans doesn't only learn the disease, it also partly learns that hospital's own scanner style, image quality, and patient population. Since this is a demo tool with no guarantee every future image will look like an NIH one, the multi-dataset `all` weights were chosen instead.
+
+The second choice was image resolution. TorchXRayVision also offers a completely different model, `resnet50-res512-all`, that reads images at 512x512 pixels instead of 224x224. The larger input can keep more detail, but it also needs more computation. Timing one inference of each, on the same CPU, with nothing else different:
+
+```text
+224x224 DenseNet121 (chosen):  24.7 ms
+512x512 ResNet50:              116.0 ms
+```
+
+The larger model was roughly 4.7x slower - a real cost on the CPU-only setup this project deliberately uses, so the smaller, faster architecture was kept.
+
+The earlier classifier is kept as an automatic fallback:
+
+```python
+def run_inference(pixels, mode, object_path):
+    if mode == "xray" and XRAY_MODEL is not None:
+        try:
+            return run_xray_inference(pixels)
+        except Exception as exc:
+            log_event("xray_fallback", status="fallback", level="WARNING", error=str(exc))
+    return run_stat_inference(pixels)
+```
+
+The logic is simple: try the real X-ray model first if `mode` is `"xray"`. If that fails for any reason, log it and fall back to the older statistical result instead. This keeps the service answering requests even when the full model isn't available.
+
+The model needs an actual chest X-ray to say anything meaningful, so two public samples from the NIH ChestX-ray14 dataset were added (see `docs/sample-data.md` for the full source and license) - one the dataset's own ground truth labels as `Cardiomegaly`, the other as `No Finding`:
+
+```text
+00000001_000.png  - NIH ground-truth label: Cardiomegaly (abnormal)
+00027426_000.png  - NIH ground-truth label: No Finding (normal)
+```
+
+Both are already plain PNGs, not DICOM files. Because of that, they don't need the anonymizer or preview-generator step. A new script uploads each straight to MinIO and registers it as its own study, reusing the existing `studies` table and dashboard exactly as-is:
+
+```bash
+./scripts/download-xray-samples.sh
+./services/metadata-extractor/.venv/bin/python services/metadata-extractor/register_xray_samples.py
+```
+
+Running the model against the "No Finding" sample produced something worth explaining rather than hiding. Its top probabilities - Mass 60.6%, Nodule 53.6%, and a few others in the same range - could look like confident detections at a glance. They aren't. This model scores every finding independently on a 0-1 scale, and values near 0.5 mean the model is genuinely unsure, not that it spotted something. The dashboard now says so directly, underneath the findings table:
+
+![Dashboard Study Detail panel for the "No Finding" X-ray sample, showing the chest X-ray image, the Run AI Demo Inference button, a findings table (Mass, Nodule, Lung Lesion, Infiltration, Consolidation, all 50-61%), a note explaining these are per-finding probabilities and values near 50% aren't confident either way, and the disclaimer](images/step-24-dashboard-xray-normal.png)
+
+Calling `/infer` directly returns every finding's probability, not just the top ones:
+
+![Swagger UI for POST /infer on ai-inference, body pointing at the Cardiomegaly sample, showing the start of a 200 response: model_name, model_version, mode "xray", prediction_label "Cardiomegaly", and the top_findings array](images/step-24-infer-response-top-findings.png)
+
+![The same response scrolled further down, showing the full finding_probabilities object with all 18 pathologies, inference_time_ms, and the disclaimer](images/step-24-infer-response-finding-probabilities.png)
+
+`ai_results` gained two new columns to hold this:
+
+```sql
+ALTER TABLE ai_results ADD COLUMN mode TEXT;
+ALTER TABLE ai_results ADD COLUMN findings JSONB;
+```
+
+`mode` stores which model actually ran. `findings` stores the top labeled probabilities as JSON. Querying a stored result directly confirms both land correctly, matching what the endpoint returned:
+
+![Terminal running an expanded (-x) psql SELECT against ai_results for the Cardiomegaly sample, showing result_id, orthanc_study_id, prediction_label "Cardiomegaly", confidence 0.6215, mode "xray", and the full findings JSON array](images/step-24-ai-results-db-row.png)
+
+Adding a real machine learning library also has a visible cost. The ai-inference container is now much bigger than every other service in this project - torch, torchvision, and TorchXRayVision together bring it to around 1.9 GB, against tens of MB for the rest. The model's weights are downloaded once at Docker build time rather than when the container starts, so running the stack afterward never depends on internet access.
+
+Four new pytest tests cover the stat/X-ray dispatch logic directly: `run_stat_inference`'s output shape, and `run_inference` falling back correctly when the X-ray model isn't loaded. That's always true for a plain import, since model loading only happens through the app's real startup, never at import time - so these tests need no torch model and stay fast.
+

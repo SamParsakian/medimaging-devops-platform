@@ -58,6 +58,12 @@ CREATE TABLE IF NOT EXISTS study_slices (
 -- study can keep more than one result over time instead of only ever
 -- showing the most recent one.
 
+-- mode and findings were added in Step 24, once results could come from
+-- the real X-ray model as well as the stat classifier: mode records
+-- which one produced the row ("xray" or "stat"), and findings holds
+-- the model's top labeled probabilities as a JSON array - null for
+-- older stat-only rows, which only ever had a single label.
+
 CREATE TABLE IF NOT EXISTS ai_results (
     result_id SERIAL PRIMARY KEY,
     orthanc_study_id TEXT NOT NULL,
@@ -68,5 +74,7 @@ CREATE TABLE IF NOT EXISTS ai_results (
     confidence DOUBLE PRECISION NOT NULL,
     inference_time_ms DOUBLE PRECISION NOT NULL,
     disclaimer TEXT NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    mode TEXT,
+    findings JSONB
 );

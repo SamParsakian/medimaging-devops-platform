@@ -20,6 +20,7 @@ from fastapi.staticfiles import StaticFiles
 from minio import Minio
 from minio.error import S3Error
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
+from psycopg2.extras import Json
 
 SERVICE_NAME = "api"
 
@@ -140,7 +141,8 @@ AUDIT_COLUMNS = "event_id, user_id, action, study_id, timestamp, ip_address, sta
 
 AI_RESULT_COLUMNS = (
     "result_id, orthanc_study_id, input_object, model_name, model_version, "
-    "prediction_label, confidence, inference_time_ms, disclaimer, created_at"
+    "prediction_label, confidence, inference_time_ms, disclaimer, created_at, "
+    "mode, findings"
 )
 
 
@@ -206,10 +208,16 @@ def row_to_ai_result(row):
         "inference_time_ms": row[7],
         "disclaimer": row[8],
         "created_at": row[9].isoformat() if row[9] else None,
+        "mode": row[10],
+        # Named top_findings here (not the DB column name "findings") so
+        # a stored result has the exact same shape as a live /infer
+        # response, and the dashboard can render both with one function.
+        "top_findings": row[11],
     }
 
 
 def store_ai_result(study_id, result):
+    findings = result.get("top_findings")
     conn = get_connection()
     try:
         with conn:
@@ -218,9 +226,10 @@ def store_ai_result(study_id, result):
                     """
                     INSERT INTO ai_results (
                         orthanc_study_id, input_object, model_name, model_version,
-                        prediction_label, confidence, inference_time_ms, disclaimer
+                        prediction_label, confidence, inference_time_ms, disclaimer,
+                        mode, findings
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         study_id,
@@ -231,6 +240,8 @@ def store_ai_result(study_id, result):
                         result["confidence"],
                         result["inference_time_ms"],
                         result["disclaimer"],
+                        result.get("mode"),
+                        Json(findings) if findings is not None else None,
                     ),
                 )
     finally:
@@ -280,6 +291,22 @@ def metrics():
     finally:
         conn.close()
     return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+
+@app.get("/ai-config")
+def get_ai_config():
+    """Proxies ai-inference's own /config endpoint, so the dashboard
+    can show the model's configuration without needing direct access
+    to ai-inference - same reasoning as the /infer proxy below."""
+    try:
+        response = requests.get(f"http://{AI_INFERENCE_HOST}:{AI_INFERENCE_PORT}/config", timeout=5)
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=502, detail="AI inference service unavailable") from exc
+
+    if response.status_code != 200:
+        raise HTTPException(status_code=502, detail="AI inference service returned an error")
+
+    return response.json()
 
 
 @app.get("/studies")

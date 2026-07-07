@@ -48,6 +48,15 @@
       padding: 1rem 1.25rem;
     }
 
+    .model-config {
+      background: #fff;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      padding: 1rem 1.25rem;
+      margin-bottom: 1.5rem;
+      max-width: 640px;
+    }
+
     h2 {
       font-size: 1.1rem;
       margin-top: 0;
@@ -180,6 +189,16 @@
       cursor: pointer;
     }
 
+    .findings-table {
+      margin-top: 0.75rem;
+    }
+
+    .findings-note {
+      margin-top: 0.5rem;
+      color: #666;
+      font-size: 0.78rem;
+    }
+
     .disclaimer {
       margin-top: 0.5rem;
       color: #8a6a00;
@@ -193,6 +212,13 @@
     <h1>Medical Imaging Dashboard</h1>
     <p class="subtitle">Demo-grade viewer - no real patient data, no clinical use.</p>
   </header>
+
+  <section class="model-config">
+    <h2>AI Model Configuration</h2>
+    <table class="detail-table" id="model-config-table">
+      <tr><td colspan="2">Loading model configuration...</td></tr>
+    </table>
+  </section>
 
   <main class="layout">
     <section class="study-list">
@@ -270,6 +296,32 @@
     function statusBadge(status) {
       const cls = status === "done" ? "available" : status === "failed" ? "failed" : "pending";
       return `<span class="badge ${cls}">${status}</span>`;
+    }
+
+    async function loadModelConfig() {
+      const table = document.getElementById("model-config-table");
+      try {
+        const response = await apiFetch("/ai-config");
+        const config = await response.json();
+        if (!response.ok) {
+          table.innerHTML = `<tr><td colspan="2" class="error-text">${config.detail ?? "Could not load model configuration"}</td></tr>`;
+          return;
+        }
+        table.innerHTML = `
+          <tr><th>X-ray Model</th><td>${config.xray_model_name} (v${config.xray_model_version})</td></tr>
+          <tr><th>Weights</th><td>${config.xray_weights}</td></tr>
+          <tr><th>Source</th><td>${config.xray_model_source}</td></tr>
+          <tr><th>Input Size</th><td>${config.xray_input_size} x ${config.xray_input_size}</td></tr>
+          <tr><th>Preprocessing</th><td>${config.xray_preprocessing}</td></tr>
+          <tr><th>Top Findings Shown</th><td>${config.top_findings_count}</td></tr>
+          <tr><th>Confidence Threshold</th><td>${config.confidence_threshold}</td></tr>
+          <tr><th>Heatmap Target Rule</th><td>${config.heatmap_target_rule}</td></tr>
+          <tr><th>Runtime Mode</th><td>${config.runtime_mode}</td></tr>
+          <tr><th>Fallback Model</th><td>${config.fallback_model_name} (v${config.fallback_model_version})</td></tr>
+        `;
+      } catch (err) {
+        table.innerHTML = `<tr><td colspan="2" class="error-text">Could not reach the API.</td></tr>`;
+      }
     }
 
     async function loadStudies() {
@@ -360,13 +412,30 @@
     }
 
     function renderAiResult(data) {
+      const findings = data.top_findings ?? [{ label: data.prediction_label, probability: data.confidence }];
+      const findingsRows = findings
+        .map((f) => `<tr><td>${f.label}</td><td>${(f.probability * 100).toFixed(1)}%</td></tr>`)
+        .join("");
+
+      // Each row is the model's own independent probability for that one
+      // finding, not a diagnosis - values near 50% mean it isn't confident
+      // either way, which is worth spelling out since it applies to every
+      // finding shown, not just the top one.
+      const findingsNote = data.mode === "xray"
+        ? `<p class="findings-note">Each row is the model's own probability for that finding, not a diagnosis. Values near 50% mean it isn't confident either way.</p>`
+        : "";
+
       return `
         <table class="detail-table">
           <tr><th>Model</th><td>${data.model_name} (v${data.model_version})</td></tr>
-          <tr><th>Prediction</th><td>${data.prediction_label}</td></tr>
-          <tr><th>Confidence</th><td>${data.confidence}</td></tr>
+          <tr><th>Mode</th><td>${data.mode ?? "stat"}</td></tr>
           <tr><th>Inference Time</th><td>${data.inference_time_ms} ms</td></tr>
         </table>
+        <table class="detail-table findings-table">
+          <thead><tr><th>Finding</th><th>Probability</th></tr></thead>
+          <tbody>${findingsRows}</tbody>
+        </table>
+        ${findingsNote}
         <p class="disclaimer">${data.disclaimer}</p>
       `;
     }
@@ -459,6 +528,7 @@
       loadAuditEvents();
     }
 
+    loadModelConfig();
     loadStudies();
   </script>
 </body>
