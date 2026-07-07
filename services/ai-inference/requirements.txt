@@ -4,3 +4,5 @@ minio
 numpy
 Pillow
 prometheus-client
+torchxrayvision==1.5.2
+scikit-image

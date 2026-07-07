@@ -149,28 +149,34 @@ The page reads the key from its own URL and attaches it to every API call it mak
 
 `services/ai-inference/` is a separate FastAPI service, its own container, that takes a preview image already stored in MinIO and returns a JSON result. It runs on CPU only - no GPU, no model training, and no external AI service is called.
 
-The classifier itself (`services/ai-inference/main.py`, function `classify_pixels`) is based on pixel-intensity statistics: it converts the image to grayscale, measures how much its pixel intensities vary relative to their average brightness, and buckets that into one of three labels:
+Its primary path, as of Step 24, is a real pre-trained model: [TorchXRayVision](https://github.com/mlmed/torchxrayvision)'s `densenet121-res224-all` DenseNet, trained specifically on chest X-rays. Given a grayscale image, it returns a probability (0-1) for each of 18 possible chest findings:
 
 ```text
-low_variation_region
-moderate_variation_region
-high_variation_region
+Atelectasis, Consolidation, Infiltration, Pneumothorax, Edema, Emphysema,
+Fibrosis, Effusion, Pneumonia, Pleural_Thickening, Cardiomegaly, Nodule,
+Mass, Hernia, Lung Lesion, Fracture, Lung Opacity, Enlarged Cardiomediastinum
 ```
 
-It has its own endpoints:
+The original pixel-statistics classifier from Step 21 (`classify_pixels`) is kept as a fallback: it runs automatically if the X-ray model failed to load, and can also be requested directly with `"mode": "stat"` in the request body.
+
+Endpoints:
 
 ```text
-GET  /health   - container healthcheck
-POST /infer    - body: {"object_path": "processed/previews/.../preview_x.png"}
+GET  /health   - container healthcheck, also reports xray_model_loaded (true/false)
+GET  /metrics  - Prometheus metrics (Step 23)
+GET  /config   - the model's own configuration (see docs/ai-model-config.md)
+POST /infer    - body: {"object_path": "...", "mode": "xray"}  (mode defaults to "xray")
 ```
+
+`/config` is proxied by the API at `GET /ai-config` and shown in the dashboard's "AI Model Configuration" panel - which model is running, its weights and source, input size and preprocessing, how many findings are shown, the confidence threshold, the heatmap target rule, and the runtime mode. See `docs/ai-model-config.md` for what each of these settings actually does and, for the two where a real alternative existed, why it wasn't chosen.
 
 ```bash
 curl -X POST http://localhost:8100/infer \
   -H "Content-Type: application/json" \
-  -d '{"object_path": "processed/previews/<study-uid>/<preview-file>.png"}'
+  -d '{"object_path": "samples/xray/00000001_000.png"}'
 ```
 
-`/infer` rejects bad input cleanly instead of crashing: a missing or non-existent `object_path` returns 404, an object that isn't a valid image (wrong file entirely, or corrupt image bytes) returns 422, and a request body missing `object_path` (or sending an empty string) also returns 422 from the same field validation FastAPI already does automatically.
+`/infer` rejects bad input cleanly instead of crashing: a missing or non-existent `object_path` returns 404, an object that isn't a valid image (wrong file entirely, or corrupt image bytes) returns 422, and a request body missing `object_path` (or sending an empty string, or an unrecognized `mode`) also returns 422 from the same field validation FastAPI already does automatically.
 
 The API service never needs MinIO credentials handed to a caller for this - a new endpoint, `POST /studies/{id}/infer`, looks up that study's own `preview_object_path` and proxies the call to the ai-inference service, the same "API is the only thing that talks to MinIO directly" pattern used everywhere else in this project. It's behind the same API key as every other non-public endpoint, and it forwards ai-inference's own status code and message when something goes wrong (404, 422) rather than flattening every failure into a generic error - a 502 is only used if ai-inference itself can't be reached at all.
 
@@ -178,19 +184,35 @@ The API service never needs MinIO credentials handed to a caller for this - a ne
 curl -X POST -H "X-API-Key: changeme" http://localhost:8000/studies/<orthanc-study-id>/infer
 ```
 
-Every response, from either endpoint, includes the same fields:
+Every response, from either endpoint, includes:
 
 ```text
-model_name             - "demo-image-stat-classifier"
-model_version          - "0.1.0"
-input_object           - the MinIO object path that was analyzed
-prediction_label       - one of the three labels above
-confidence             - 0-1, how far the measured variation sits from a label boundary
-inference_time_ms      - how long the classification itself took
-disclaimer             - "Technical demo only. Not for clinical diagnosis."
+model_name             - "torchxrayvision-densenet121-res224-all", or "demo-image-stat-classifier" in stat mode
+model_version           - the package/checkpoint version
+input_object            - the MinIO object path that was analyzed
+mode                    - "xray" or "stat", whichever actually ran
+prediction_label        - the single highest-probability finding
+confidence              - that finding's probability (0-1)
+top_findings            - the top 5 findings as [{"label": ..., "probability": ...}, ...] (just 1 entry in stat mode)
+finding_probabilities   - every pathology's probability (null in stat mode)
+inference_time_ms       - how long the classification itself took
+disclaimer              - "Technical demo only. Not for clinical diagnosis."
 ```
 
-The dashboard's Study Detail panel has a "Run AI Demo Inference" button under the preview image, which calls the API's proxy endpoint and shows the same fields, disclaimer included. The ai-inference container itself has no API key check of its own - it isn't meant to be reached directly outside the demo, only through the API's proxy endpoint.
+The dashboard's Study Detail panel has a "Run AI Demo Inference" button under the preview image, which calls the API's proxy endpoint and shows the finding/probability table, disclaimer included. The ai-inference container itself has no API key check of its own - it isn't meant to be reached directly outside the demo, only through the API's proxy endpoint.
+
+Baking a real model into the image makes ai-inference a much bigger container than everything else in this project - torch, torchvision, and TorchXRayVision together bring it to around 1.9 GB, versus tens of MB for the other services. The model's weights (~30 MB) are downloaded once, at Docker build time, not at container startup, so running the stack afterward never depends on internet access.
+
+### Chest X-ray sample studies
+
+The chest X-ray model needs an actual chest X-ray to say anything meaningful - running it against the existing CT/MR studies would just be a domain mismatch. `services/metadata-extractor/register_xray_samples.py` registers the two samples from `docs/sample-data.md` as their own studies, reusing the exact same `studies` table and MinIO bucket every other study uses:
+
+```bash
+./scripts/download-xray-samples.sh
+./services/metadata-extractor/.venv/bin/python services/metadata-extractor/register_xray_samples.py
+```
+
+Since these are already plain PNGs (not DICOM), there's no anonymizer/preview-generator step to run - the script uploads each file to MinIO as-is and inserts one `studies` row per sample, with `orthanc_study_id` values of `xray-sample-abnormal` and `xray-sample-normal` (not real Orthanc IDs, since these never go through Orthanc) and `modality` set to `CR` (Computed Radiography). Both then show up in the dashboard's study list and work with "Run AI Demo Inference" exactly like any other study.
 
 ## Storing AI results
 
@@ -207,9 +229,13 @@ CREATE TABLE IF NOT EXISTS ai_results (
     confidence DOUBLE PRECISION NOT NULL,
     inference_time_ms DOUBLE PRECISION NOT NULL,
     disclaimer TEXT NOT NULL,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    mode TEXT,
+    findings JSONB
 );
 ```
+
+`mode` and `findings` were added in Step 24, once results could come from either the real X-ray model or the stat classifier: `mode` records which one produced the row, and `findings` holds the top labeled probabilities as JSON (null for older stat-only rows, which only ever had one label anyway).
 
 A new endpoint lists every result stored for a study, newest first:
 

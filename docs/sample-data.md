@@ -59,3 +59,26 @@ This saves the 15 selected slices to `sample-data/downloads/multislice-mri/` (gi
 ```
 
 Since every slice shares the same `StudyInstanceUID` and `SeriesInstanceUID`, Orthanc groups all 15 into one study with one series automatically. See `docs/local-stack.md` for how the rest of the pipeline (anonymize, preview, upload to MinIO, and slice navigation in the dashboard) handles this series.
+
+## Fourth and fifth samples: chest X-rays for the real AI model
+
+Step 24 replaced the ai-inference service's placeholder classifier with a real pre-trained model ([TorchXRayVision](https://github.com/mlmed/torchxrayvision)), which is trained specifically on chest X-rays rather than the CT/MRI images used everywhere else in this project. Two individual PNG images from the NIH ChestX-ray14 dataset are used to test it:
+
+```text
+00000001_000.png  - NIH ground-truth label: Cardiomegaly (abnormal)
+00027426_000.png  - NIH ground-truth label: No Finding (normal)
+```
+
+- Source: both files are mirrored in the TorchXRayVision project's own GitHub repository, at `https://github.com/mlmed/torchxrayvision/raw/master/tests/`, where the library's own maintainers use them as test fixtures for exactly this kind of inference.
+- Original dataset: [NIH ChestX-ray14](https://nihcc.app.box.com/v/ChestXray-NIHCC), released by the NIH Clinical Center - 112,120 chest X-ray images from 30,805 patients, each labeled for 14 possible thoracic findings (or "No Finding").
+- License: public domain, a work of the U.S. federal government - there is no restriction on how the images may be used. The NIH's own release asks that anyone using the data link back to their download page and credit the NIH Clinical Center as the source, which this file does.
+- The ground-truth labels above come from the dataset's own `Data_Entry_2017.csv` metadata file (Image Index `00000001_000.png` -> `Cardiomegaly`; `00027426_000.png` -> `No Finding`), not from this project's model - they're what the NIH radiologist-derived labels say each image actually shows, independent of whatever the model predicts for it.
+- Both are small individual PNG files (~180 KB each), not the full 112,120-image, 42 GB dataset - only these two files are downloaded, and only on demand.
+
+Downloaded with:
+
+```bash
+./scripts/download-xray-samples.sh
+```
+
+This saves both files to `sample-data/downloads/xray/` (git-ignored). See `docs/local-stack.md` for how the ai-inference service uses them.
