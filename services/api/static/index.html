@@ -199,6 +199,20 @@
       font-size: 0.78rem;
     }
 
+    .heatmap-label {
+      margin: 0.75rem 0 0.25rem;
+      font-size: 0.85rem;
+      color: #555;
+    }
+
+    .heatmap-image {
+      max-width: 224px;
+      width: 100%;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      display: block;
+    }
+
     .disclaimer {
       margin-top: 0.5rem;
       color: #8a6a00;
@@ -411,7 +425,7 @@
       updateSliceView(studyId);
     }
 
-    function renderAiResult(data) {
+    function renderAiResult(data, studyId) {
       const findings = data.top_findings ?? [{ label: data.prediction_label, probability: data.confidence }];
       const findingsRows = findings
         .map((f) => `<tr><td>${f.label}</td><td>${(f.probability * 100).toFixed(1)}%</td></tr>`)
@@ -425,12 +439,23 @@
         ? `<p class="findings-note">Each row is the model's own probability for that finding, not a diagnosis. Values near 50% mean it isn't confident either way.</p>`
         : "";
 
+      // Only X-ray results carry a heatmap - the stat classifier has
+      // nothing to point at, and a heatmap can be missing even in xray
+      // mode if generating it failed (the finding result is kept either way).
+      const heatmapBlock = data.heatmap_object && data.result_id
+        ? `
+          <p class="heatmap-label">Heatmap for top finding (${data.prediction_label}):</p>
+          <img class="heatmap-image" src="${withApiKey(`/studies/${studyId}/ai-results/${data.result_id}/heatmap-image`)}" alt="AI heatmap for ${data.prediction_label}" />
+        `
+        : "";
+
       return `
         <table class="detail-table">
           <tr><th>Model</th><td>${data.model_name} (v${data.model_version})</td></tr>
           <tr><th>Mode</th><td>${data.mode ?? "stat"}</td></tr>
           <tr><th>Inference Time</th><td>${data.inference_time_ms} ms</td></tr>
         </table>
+        ${heatmapBlock}
         <table class="detail-table findings-table">
           <thead><tr><th>Finding</th><th>Probability</th></tr></thead>
           <tbody>${findingsRows}</tbody>
@@ -450,7 +475,7 @@
           resultBox.innerHTML = `<p class="error-text">${data.detail ?? "Inference failed"}</p>`;
           return;
         }
-        resultBox.innerHTML = renderAiResult(data);
+        resultBox.innerHTML = renderAiResult(data, studyId);
       } catch (err) {
         resultBox.innerHTML = `<p class="error-text">Could not reach the AI inference service.</p>`;
       }
@@ -492,7 +517,7 @@
         : "";
 
       const latestAiResult = aiResults.length > 0
-        ? renderAiResult(aiResults[0])
+        ? renderAiResult(aiResults[0], studyId)
         : `<p class="placeholder">No AI result yet for this study.</p>`;
 
       detailSection.innerHTML = `

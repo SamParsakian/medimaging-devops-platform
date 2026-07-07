@@ -195,6 +195,7 @@ prediction_label        - the single highest-probability finding
 confidence              - that finding's probability (0-1)
 top_findings            - the top 5 findings as [{"label": ..., "probability": ...}, ...] (just 1 entry in stat mode)
 finding_probabilities   - every pathology's probability (null in stat mode)
+heatmap_object          - MinIO path of a heatmap image for the top finding (null in stat mode, or if the heatmap failed)
 inference_time_ms       - how long the classification itself took
 disclaimer              - "Technical demo only. Not for clinical diagnosis."
 ```
@@ -213,6 +214,24 @@ The chest X-ray model needs an actual chest X-ray to say anything meaningful - r
 ```
 
 Since these are already plain PNGs (not DICOM), there's no anonymizer/preview-generator step to run - the script uploads each file to MinIO as-is and inserts one `studies` row per sample, with `orthanc_study_id` values of `xray-sample-abnormal` and `xray-sample-normal` (not real Orthanc IDs, since these never go through Orthanc) and `modality` set to `CR` (Computed Radiography). Both then show up in the dashboard's study list and work with "Run AI Demo Inference" exactly like any other study.
+
+### X-ray heatmap
+
+Every X-ray inference result comes with a heatmap image showing which part of the X-ray most influenced the model's top finding. It's built with Class Activation Mapping (CAM) rather than a literal Grad-CAM: TorchXRayVision's DenseNet ends with global-average-pooling straight into one Linear layer, which is exactly the architecture CAM was designed for, so the heatmap comes directly from the classifier's own weights for the top finding - no backward pass needed (`services/ai-inference/main.py`, `compute_cam`). The result is resized up to the model's 224x224 input size and blended over the original image with a simple colormap (`apply_colormap`, `build_heatmap_overlay`) - red/yellow means the model weighted that area heavily for its top finding, dark areas mean it didn't.
+
+The heatmap PNG is uploaded to MinIO under a `heatmaps/` prefix and linked to the stored result through a new `heatmap_object` column on `ai_results`:
+
+```sql
+ALTER TABLE ai_results ADD COLUMN heatmap_object TEXT;
+```
+
+A new endpoint streams it, the same MinIO-streaming pattern every other image endpoint in this API uses:
+
+```bash
+curl -H "X-API-Key: changeme" http://localhost:8000/studies/<orthanc-study-id>/ai-results/<result-id>/heatmap-image
+```
+
+`POST /studies/{id}/infer` now returns the new row's `result_id` directly in its response (not just `GET .../ai-results` afterward), so the dashboard can build this URL immediately after a fresh run, not only for a result it loads later. The dashboard's Study Detail panel shows the heatmap image right under the model/mode/inference-time table, above the findings table - not every result has one, since the stat classifier has nothing to point at and a heatmap can be missing even in X-ray mode if generating it failed (the finding result itself is kept either way).
 
 ## Storing AI results
 

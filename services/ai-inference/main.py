@@ -5,17 +5,21 @@ JSON result. The primary path runs a real pre-trained chest X-ray
 model (TorchXRayVision's DenseNet, "densenet121-res224-all" weights);
 a small pixel-statistics classifier, kept from Step 21, is used as a
 fallback if the X-ray model isn't available or a caller asks for it
-directly. CPU only, no GPU, no model training, no external AI service
-calls. Every response carries a disclaimer making clear this is a
-technical demo only.
+directly. X-ray results also come with a heatmap image (Step 25),
+showing which part of the image most influenced the top finding,
+uploaded to MinIO alongside the original preview. CPU only, no GPU, no
+model training, no external AI service calls. Every response carries
+a disclaimer making clear this is a technical demo only.
 """
 
 import io
 import json
 import os
 import time
+import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Literal
 
 import numpy as np
@@ -151,12 +155,77 @@ def classify_pixels(pixels):
     return label, confidence
 
 
-def run_xray_inference(pixels):
+def compute_cam(feature_maps, class_weights):
+    """Class Activation Mapping (Zhou et al., 2016). TorchXRayVision's
+    DenseNet ends with global-average-pooling straight into one Linear
+    layer, which is exactly the architecture CAM was designed for - so
+    the heatmap is computed directly from the classifier's own weights
+    for the target finding, with no backward pass needed (a plain
+    Grad-CAM reduces to this exact computation for this architecture,
+    it just does it a longer way round). feature_maps: (C, H, W) numpy
+    array from the last conv layer. class_weights: (C,) numpy array,
+    the classifier's weights for one finding. Returns an (H, W) array
+    scaled to [0, 1]."""
+    cam = np.tensordot(class_weights, feature_maps, axes=([0], [0]))
+    cam = np.maximum(cam, 0)
+    if cam.max() > 0:
+        cam = cam / cam.max()
+    return cam
+
+
+def apply_colormap(norm):
+    """norm: 2D float array in [0, 1]. Returns an (H, W, 3) uint8 RGB
+    array using a simple black -> red -> yellow -> white "hot"
+    colormap, so no extra plotting library is needed just for this."""
+    r = np.clip(norm * 3, 0, 1)
+    g = np.clip(norm * 3 - 1, 0, 1)
+    b = np.clip(norm * 3 - 2, 0, 1)
+    return (np.stack([r, g, b], axis=-1) * 255).astype(np.uint8)
+
+
+def build_heatmap_overlay(base_pixels, cam, alpha=0.45):
+    """base_pixels: 2D array, the same model-input-sized grayscale
+    image the CAM was computed from (so the two line up spatially).
+    cam: 2D float array in [0, 1], any size - resized up to match.
+    Returns a PIL Image blending the colorized heatmap over the
+    grayscale image."""
+    height, width = base_pixels.shape
+    cam_image = Image.fromarray((cam * 255).astype(np.uint8)).resize((width, height), Image.BILINEAR)
+    cam_resized = np.array(cam_image).astype(np.float32) / 255.0
+    heatmap_rgb = apply_colormap(cam_resized)
+
+    base = base_pixels.astype(np.float32)
+    base = (base - base.min()) / (base.max() - base.min() + 1e-6) * 255
+    base_rgb = np.stack([base.astype(np.uint8)] * 3, axis=-1)
+
+    overlay = (alpha * heatmap_rgb + (1 - alpha) * base_rgb).astype(np.uint8)
+    return Image.fromarray(overlay)
+
+
+def upload_heatmap(overlay_image, object_path):
+    """Uploads a heatmap PNG to MinIO next to the "heatmaps/" prefix,
+    named after the input object plus a short random suffix so
+    repeated runs on the same image don't overwrite each other."""
+    client = get_minio_client()
+    stem = Path(object_path).stem
+    heatmap_object = f"heatmaps/{stem}_{uuid.uuid4().hex[:8]}.png"
+
+    buffer = io.BytesIO()
+    overlay_image.save(buffer, format="PNG")
+    buffer.seek(0)
+    client.put_object(
+        MINIO_BUCKET, heatmap_object, buffer, length=buffer.getbuffer().nbytes,
+        content_type="image/png",
+    )
+    return heatmap_object
+
+
+def run_xray_inference(pixels, object_path):
     """Runs the real TorchXRayVision DenseNet model over a grayscale
     image and returns every pathology's probability, plus the top
-    findings sorted by probability. Raises if the model isn't loaded
-    or the image can't be processed - the caller falls back to
-    classify_pixels() in that case."""
+    findings sorted by probability and a heatmap for the top finding.
+    Raises if the model isn't loaded or the image can't be processed -
+    the caller falls back to classify_pixels() in that case."""
     if XRAY_MODEL is None:
         raise RuntimeError("X-ray model is not loaded")
 
@@ -166,8 +235,18 @@ def run_xray_inference(pixels):
     img = XRAY_TRANSFORM(img)
     tensor = torch.from_numpy(img).unsqueeze(0)
 
-    with torch.no_grad():
-        outputs = XRAY_MODEL(tensor)[0]
+    # The last conv layer's own output feature maps are needed for the
+    # heatmap, so a forward hook grabs them on the way through - no
+    # backward pass required (see compute_cam).
+    feature_maps = {}
+    handle = XRAY_MODEL.features.register_forward_hook(
+        lambda module, module_in, module_out: feature_maps.update(value=module_out)
+    )
+    try:
+        with torch.no_grad():
+            outputs = XRAY_MODEL(tensor)[0]
+    finally:
+        handle.remove()
 
     probabilities = {
         label: round(float(prob), 4)
@@ -175,6 +254,19 @@ def run_xray_inference(pixels):
     }
     top_findings = sorted(probabilities.items(), key=lambda item: -item[1])[:TOP_FINDINGS_COUNT]
     top_label, top_confidence = top_findings[0]
+
+    heatmap_object = None
+    try:
+        top_index = XRAY_MODEL.pathologies.index(top_label)
+        class_weights = XRAY_MODEL.classifier.weight[top_index].detach().numpy()
+        cam = compute_cam(feature_maps["value"][0].detach().numpy(), class_weights)
+        overlay_image = build_heatmap_overlay(img[0], cam)
+        heatmap_object = upload_heatmap(overlay_image, object_path)
+    except Exception as exc:  # noqa: BLE001 - a heatmap failure shouldn't lose the actual result
+        log_event(
+            "generate_heatmap", status="failed", level="WARNING",
+            error=str(exc), input_object=object_path,
+        )
 
     return {
         "mode": "xray",
@@ -184,6 +276,7 @@ def run_xray_inference(pixels):
         "confidence": top_confidence,
         "top_findings": [{"label": label, "probability": prob} for label, prob in top_findings],
         "finding_probabilities": probabilities,
+        "heatmap_object": heatmap_object,
     }
 
 
@@ -197,13 +290,14 @@ def run_stat_inference(pixels):
         "confidence": confidence,
         "top_findings": [{"label": label, "probability": confidence}],
         "finding_probabilities": None,
+        "heatmap_object": None,
     }
 
 
 def run_inference(pixels, mode, object_path):
     if mode == "xray" and XRAY_MODEL is not None:
         try:
-            return run_xray_inference(pixels)
+            return run_xray_inference(pixels, object_path)
         except Exception as exc:  # noqa: BLE001 - any x-ray failure falls back to the stat classifier
             log_event(
                 "xray_fallback", status="fallback", level="WARNING",
@@ -307,6 +401,7 @@ def infer(request: InferRequest):
         "confidence": outcome["confidence"],
         "top_findings": outcome["top_findings"],
         "finding_probabilities": outcome["finding_probabilities"],
+        "heatmap_object": outcome["heatmap_object"],
         "inference_time_ms": inference_time_ms,
         "disclaimer": DISCLAIMER,
     }

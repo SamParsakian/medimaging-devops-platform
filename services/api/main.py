@@ -142,7 +142,7 @@ AUDIT_COLUMNS = "event_id, user_id, action, study_id, timestamp, ip_address, sta
 AI_RESULT_COLUMNS = (
     "result_id, orthanc_study_id, input_object, model_name, model_version, "
     "prediction_label, confidence, inference_time_ms, disclaimer, created_at, "
-    "mode, findings"
+    "mode, findings, heatmap_object"
 )
 
 
@@ -213,10 +213,15 @@ def row_to_ai_result(row):
         # a stored result has the exact same shape as a live /infer
         # response, and the dashboard can render both with one function.
         "top_findings": row[11],
+        "heatmap_object": row[12],
     }
 
 
 def store_ai_result(study_id, result):
+    """Inserts one ai_results row and returns its new result_id, so the
+    caller can hand it straight back to the client - that's what lets
+    the dashboard build a heatmap-image URL from a result it just got
+    back from POST /infer, not only from a later GET .../ai-results."""
     findings = result.get("top_findings")
     conn = get_connection()
     try:
@@ -227,9 +232,10 @@ def store_ai_result(study_id, result):
                     INSERT INTO ai_results (
                         orthanc_study_id, input_object, model_name, model_version,
                         prediction_label, confidence, inference_time_ms, disclaimer,
-                        mode, findings
+                        mode, findings, heatmap_object
                     )
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    RETURNING result_id
                     """,
                     (
                         study_id,
@@ -242,8 +248,10 @@ def store_ai_result(study_id, result):
                         result["disclaimer"],
                         result.get("mode"),
                         Json(findings) if findings is not None else None,
+                        result.get("heatmap_object"),
                     ),
                 )
+                return cur.fetchone()[0]
     finally:
         conn.close()
 
@@ -446,7 +454,7 @@ def run_inference(study_id: str, request: Request):
         raise HTTPException(status_code=ai_response.status_code, detail=detail)
 
     result = ai_response.json()
-    store_ai_result(study_id, result)
+    result["result_id"] = store_ai_result(study_id, result)
     log_audit_event(request, "run_inference", study_id, "success")
     return result
 
@@ -475,6 +483,44 @@ def list_ai_results(study_id: str, request: Request):
 
     log_audit_event(request, "list_ai_results", study_id, "success")
     return [row_to_ai_result(row) for row in rows]
+
+
+@app.get("/studies/{study_id}/ai-results/{result_id}/heatmap-image")
+def get_ai_result_heatmap_image(study_id: str, result_id: int, request: Request):
+    """Streams a stored AI result's Class Activation Mapping heatmap
+    from MinIO, the same streaming pattern every other image endpoint
+    in this API already uses. Not every result has one - the stat
+    classifier never produces a heatmap, and an X-ray result can be
+    missing one if heatmap generation itself failed."""
+    try:
+        fetch_study(study_id)
+    except HTTPException:
+        log_audit_event(request, "view_heatmap_image", study_id, "not_found")
+        raise
+
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT heatmap_object FROM ai_results WHERE orthanc_study_id = %s AND result_id = %s",
+                (study_id, result_id),
+            )
+            row = cur.fetchone()
+    finally:
+        conn.close()
+
+    if row is None or row[0] is None:
+        log_audit_event(request, "view_heatmap_image", study_id, "not_found")
+        raise HTTPException(status_code=404, detail="No heatmap available for this result")
+
+    try:
+        result = stream_minio_object(row[0])
+    except S3Error as exc:
+        log_audit_event(request, "view_heatmap_image", study_id, "not_found")
+        raise HTTPException(status_code=404, detail="Heatmap object not found in MinIO") from exc
+
+    log_audit_event(request, "view_heatmap_image", study_id, "success")
+    return result
 
 
 @app.get("/studies/{study_id}/slices")

@@ -392,3 +392,61 @@ Neither changed how the finished feature behaves - both were caught and fixed be
 
 The same library also slowed down CI. The GitHub Actions check that runs on every push used to finish in about 30 seconds. It now takes about a minute and a half, since it has to install PyTorch and TorchXRayVision every time. Still fast enough not to be a problem, just worth knowing why it grew.
 
+## Step 25 - X-ray AI Heatmap Overlay
+
+In this step, every X-ray inference result started coming with a heatmap image alongside it.
+
+A probability number alone doesn't answer an obvious question: which part of the image actually made the model say that? A heatmap answers it directly, by lighting up the exact area the model weighted most heavily for its top finding.
+
+There are two well-known ways to build this kind of heatmap for a CNN (a convolutional neural network - the type of model used here, which scans an image in small overlapping patches rather than all at once). The newer, more general technique is called Grad-CAM. There's also an older, simpler technique it grew out of, called plain CAM (Class Activation Mapping). CAM only works if a network's last few layers are built a specific way - and TorchXRayVision's DenseNet happens to be built exactly that way.
+
+Its last step takes everything the network learned about the image, averages it down into one compact set of numbers, and feeds that straight into a single scoring layer with nothing else in between. Because of that specific shape, plain CAM gives the exact same answer Grad-CAM would - just more directly, without Grad-CAM's extra step of running the network backward to work out which pixels mattered. That's why this project uses CAM:
+
+```python
+def compute_cam(feature_maps, class_weights):
+    cam = np.tensordot(class_weights, feature_maps, axes=([0], [0]))
+    cam = np.maximum(cam, 0)
+    if cam.max() > 0:
+        cam = cam / cam.max()
+    return cam
+```
+
+`feature_maps` comes from a forward hook - a small piece of code that reads a layer's output as data passes through the model, without changing how the model runs - placed on the model's last convolutional layer. `class_weights` is simply the row of the classifier's weight matrix for the top finding.
+
+The result is a small 7x7 grid, one value per patch of the image rather than per pixel. That grid is resized up to the model's 224x224 input size and blended over the original image with a small hand-written colormap (black to red to yellow to white) - no extra plotting library needed for that.
+
+The heatmap PNG is uploaded to MinIO under a new `heatmaps/` prefix, and its path is linked to the row through a new column:
+
+```sql
+ALTER TABLE ai_results ADD COLUMN heatmap_object TEXT;
+```
+
+A new endpoint streams it, the same MinIO-streaming pattern every other image endpoint in this API already uses:
+
+```text
+GET /studies/{id}/ai-results/{result_id}/heatmap-image
+```
+
+The dashboard's Study Detail panel shows the heatmap right under the model/mode/inference-time table, above the findings table - so the original X-ray, the AI's own findings, and where it was looking all sit in the same place. Running it on the Cardiomegaly sample, the heatmap lines up right over the heart:
+
+![Dashboard Study Detail panel for the abnormal X-ray sample, showing the original chest X-ray image above, and below the AI result section: Model, Mode, Inference Time, a heatmap image glowing red/yellow directly over the heart labeled "Heatmap for top finding (Cardiomegaly)", the findings table, and the disclaimer](images/step-25-dashboard-heatmap-abnormal.png)
+
+The same thing on the "No Finding" sample, whose top finding was `Mass`, shows the heatmap sitting over a different part of the lung field entirely - proof the heatmap moves with whatever the model actually flagged, not a fixed spot on the image:
+
+![Dashboard Study Detail panel for the normal X-ray sample, showing the heatmap glowing over an upper-lung region labeled "Heatmap for top finding (Mass)", with its own findings table and disclaimer below](images/step-25-dashboard-heatmap-normal.png)
+
+Querying the stored row directly shows the same path the dashboard used:
+
+![Terminal running an expanded (-x) psql SELECT against ai_results for the Cardiomegaly sample, showing result_id, orthanc_study_id, prediction_label "Cardiomegaly", mode "xray", and heatmap_object set to a real heatmaps/... path](images/step-25-ai-results-heatmap-db-row.png)
+
+And the file the database points at is a real object sitting in MinIO, not just a path string - the bucket now has a `heatmaps/` folder alongside `processed/` and `samples/`:
+
+![MinIO Console Object Browser showing the medimaging bucket's root, with three folders: heatmaps, processed, and samples](images/step-25-minio-heatmaps-folder.png)
+
+Opening one of the files inside confirms it's a real, viewable image - the same heatmap PNG shown in the dashboard:
+
+![MinIO Console showing the heatmaps/ folder's contents (three PNG files) with one open in a preview popup, showing the same red/yellow heatmap over the heart](images/step-25-minio-heatmap-preview.png)
+
+`POST /studies/{id}/infer` now returns the new row's `result_id` directly in its own response (`store_ai_result` uses `RETURNING result_id`). That's what lets the dashboard build a heatmap URL immediately after a fresh run, not only for a result it loads later.
+
+Four new pytest tests cover `compute_cam`, `apply_colormap`, and `build_heatmap_overlay` directly against small synthetic arrays - pure math and image blending, no torch model needed for any of it.
