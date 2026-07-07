@@ -145,6 +145,12 @@ AI_RESULT_COLUMNS = (
     "mode, findings, heatmap_object"
 )
 
+EVALUATION_COLUMNS = (
+    "id, sample_id, orthanc_study_id, ai_result_id, expected_label, expected_group, "
+    "top_finding, top_confidence, confidence_bucket, match_status, inference_time_ms, "
+    "threshold_used, created_at"
+)
+
 
 def get_connection():
     return psycopg2.connect(
@@ -193,6 +199,24 @@ def row_to_audit_event(row):
         "timestamp": row[4].isoformat() if row[4] else None,
         "ip_address": row[5],
         "status": row[6],
+    }
+
+
+def row_to_evaluation_sample(row):
+    return {
+        "id": row[0],
+        "sample_id": row[1],
+        "orthanc_study_id": row[2],
+        "ai_result_id": row[3],
+        "expected_label": row[4],
+        "expected_group": row[5],
+        "top_finding": row[6],
+        "top_confidence": row[7],
+        "confidence_bucket": row[8],
+        "match_status": row[9],
+        "inference_time_ms": row[10],
+        "threshold_used": row[11],
+        "created_at": row[12].isoformat() if row[12] else None,
     }
 
 
@@ -521,6 +545,61 @@ def get_ai_result_heatmap_image(study_id: str, result_id: int, request: Request)
 
     log_audit_event(request, "view_heatmap_image", study_id, "success")
     return result
+
+
+@app.get("/evaluation/summary")
+def get_evaluation_summary():
+    """Aggregate numbers from the last batch evaluation run (see
+    evaluation/run_evaluation.py) - how many of the 24 known-label
+    samples the X-ray model got right at the threshold that run used,
+    not a live computation over every study in the platform."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT expected_group, match_status, inference_time_ms, threshold_used "
+                "FROM xray_evaluation_results"
+            )
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+
+    if not rows:
+        return {
+            "total_samples": 0, "normal_count": 0, "abnormal_count": 0,
+            "match_count": 0, "review_needed_count": 0, "mismatch_count": 0,
+            "average_inference_time_ms": None, "threshold_used": None,
+        }
+
+    inference_times = [row[2] for row in rows if row[2] is not None]
+    return {
+        "total_samples": len(rows),
+        "normal_count": sum(1 for row in rows if row[0] == "normal"),
+        "abnormal_count": sum(1 for row in rows if row[0] == "abnormal"),
+        "match_count": sum(1 for row in rows if row[1] == "match"),
+        "review_needed_count": sum(1 for row in rows if row[1] == "review_needed"),
+        "mismatch_count": sum(1 for row in rows if row[1] == "mismatch"),
+        "average_inference_time_ms": round(sum(inference_times) / len(inference_times), 1)
+        if inference_times else None,
+        "threshold_used": rows[0][3],
+    }
+
+
+@app.get("/evaluation/samples")
+def list_evaluation_samples():
+    """Every sample from the last batch evaluation run, one row each -
+    the dashboard's evaluation table reads this directly."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"SELECT {EVALUATION_COLUMNS} FROM xray_evaluation_results "
+                "ORDER BY expected_group, sample_id"
+            )
+            rows = cur.fetchall()
+    finally:
+        conn.close()
+    return [row_to_evaluation_sample(row) for row in rows]
 
 
 @app.get("/studies/{study_id}/slices")

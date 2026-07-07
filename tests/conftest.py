@@ -12,3 +12,8 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 
 for service_dir in ("anonymizer", "preview-generator", "metadata-extractor", "ai-inference"):
     sys.path.insert(0, str(ROOT_DIR / "services" / service_dir))
+
+# evaluation/ isn't a container service like the ones above - it's a
+# standalone batch script (see evaluation/run_evaluation.py) - but its pure
+# logic (judge, confidence_bucket) is worth unit testing the same way.
+sys.path.insert(0, str(ROOT_DIR / "evaluation"))
