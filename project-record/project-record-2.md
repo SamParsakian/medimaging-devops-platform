@@ -690,3 +690,118 @@ A new script, `scripts/deployment/preflight-check.sh`, is a read-only readiness 
 ![Terminal running scripts/deployment/preflight-check.sh, showing OK/WARN lines for Docker and Compose versions, arm64 architecture with a warning about cloud GPU servers usually being amd64, nvidia-smi not found, .env.production not existing yet, both example compose files parsing correctly, and available disk space, ending "This is an advisory check only - nothing was deployed or changed."](images/step-27-preflight-check-terminal.png)
 
 Before renting an actual GPU server, the plan calls for: a fresh backup of the current stack (`scripts/backup/backup.sh`), a real `.env.production` with generated secrets that are different from the local demo ones, the NVIDIA Container Toolkit installed and confirmed with `nvidia-smi` on the host itself, and a restore test run on the new server before trusting it with anything - all covered in the two new docs, none of it done yet. No server was rented, nothing was deployed, and no domain or certificate exists - this step is the plan, not the move.
+
+## Step 28 - A Clinic Workflow Demo
+
+In this step, two new browser pages were added so the platform tells a small, complete story for the project's demo video: a radiographer uploads a new chest X-ray, the platform processes it, and a doctor opens a review page and sees the image, the AI's findings, its heatmap, and the audit trail.
+
+Everything in this step reuses what already existed - the same `studies` table, the same AI inference path, the same MinIO storage, the same audit logging. Only one truly new piece was needed: a way to actually get a new image into the platform from a browser, since every study so far had come from a script or a direct Orthanc upload, never a web form.
+
+That one new piece is `POST /studies/upload`, a multipart form endpoint that takes a plain image file straight from a browser:
+
+```python
+@app.post("/studies/upload")
+async def upload_study(
+    request: Request, file: UploadFile = File(...), label: str = Form(""),
+    auto_ai: str | None = Form(None),
+):
+    study_id = f"clinic-upload-{uuid.uuid4().hex[:8]}"
+    ...
+```
+
+It walks the upload through four real stages, writing the current one to a new `workflow_status` column after each: `received` as soon as the study row exists, `stored` once the file is in MinIO, `ai_processing` right before calling the same `/infer` path `POST /studies/{id}/infer` already uses, and finally `ready_for_review` once a result comes back - or `failed`, with the real error saved to `last_error`, if anything after storage goes wrong. This column is separate from `processing_status`/`anonymization_status`/`preview_status`/`upload_status`, which belong to the older DICOM pipeline from Steps 3 and 12 - a study uploaded this way never touches DICOM or anonymization, so overloading those columns would have been misleading. Every study from an earlier step just has `workflow_status = NULL`:
+
+```sql
+workflow_status TEXT
+```
+
+The failure path was checked directly, not assumed: uploading a plain text file instead of an image produced `workflow_status = 'failed'` with the real 422 error from the AI service saved in `last_error`, and the endpoint still returned a normal response instead of crashing. That test study was removed afterward so it wouldn't clutter the real demo data.
+
+The Radiographer Upload view (`/dashboard/upload.html`) is a file-upload form with a real drag-and-drop zone - dropping a file or clicking "browse" both feed the same upload. After a real upload, it shows the stages that just ran as a small checklist, and a list of every study uploaded this way, newest first, each with a thumbnail and its current status:
+
+![Radiographer Upload view after a real upload: the checklist showing Received, Stored in MinIO, AI processing, and Ready for review all checked off, and the Recent Studies list below with eight uploads, the newest one at the top showing a green "ready for review" status pill](images/step-28-upload-checklist.png)
+
+The Doctor Review view (`/dashboard/review.html`) lists every study with a `workflow_status` set, newest first, next to the same "AI Model Configuration" panel the main dashboard already has. Clicking a study shows its X-ray, its AI result, and a heatmap, the same way the main dashboard's study detail panel already does - plus a confidence bucket and a review flag, using the exact same reasoning as Step 26's evaluation buckets: a top finding sitting close to the model's own 0.5 point of indifference is flagged "Review Needed," anything more clearly high or low is "Clear":
+
+```javascript
+function reviewFlag(bucket) {
+  return bucket === "uncertain"
+    ? '<span class="status ai_processing"><span class="dot"></span>Review Needed</span>'
+    : '<span class="status ready_for_review"><span class="dot"></span>Clear</span>';
+}
+```
+
+Both list views also show a "Reviewed" status once a study has actually been opened - not a new tracked flag, just a read of the same audit trail every other view already writes to:
+
+```javascript
+async function wasReviewed(studyId) {
+  const response = await apiFetch(`/audit-events?study_id=${encodeURIComponent(studyId)}`);
+  const events = await response.json();
+  return events.some((e) => e.action === "view_study");
+}
+```
+
+`GET /audit-events` gained an optional `study_id` filter for this - the same table, the same rows every endpoint already logs to, just filtered down to one study instead of the newest 50 overall. Clicking a study shows the full picture - the X-ray, the AI result, the heatmap, and the review flag - and the audit trail underneath immediately shows the `view_study` event that click just created.
+
+### A clinic look, not just a clinic flow
+
+To make the interface look more like a real product for the demo video, all three pages were restyled: a dark "MedSyn Lab" theme, a left sidebar, a background image, and status shown as colored dots - sharing one stylesheet, `services/api/static/theme.css`, instead of three separately styled pages. The background image (made with an AI image tool) had sidebar text baked into it, so it was cropped down to just the artwork before a real, working sidebar was built in HTML and CSS on top of it.
+
+![The main Studies view under the new theme: dark sidebar with the MedSyn Lab logo and nav, the AI Model Configuration panel, and the X-ray Model Evaluation table from Step 26 all restyled the same way as the two new pages](images/step-28-studies-page.png)
+
+The stylesheet and background image needed to load without the API key, since the browser requests them on its own - only those two static paths were made public, every data endpoint still needs the key as before:
+
+```python
+PUBLIC_PATH_PREFIXES = ("/dashboard/theme.css", "/dashboard/images/")
+```
+
+A new script, `scripts/run-demo-workflow.sh`, uploads 3 public sample X-rays through the same upload endpoint in one run, reusing images already used in Step 26's evaluation set:
+
+```text
+Uploading 00000017_001.png (Routine chest X-ray - no prior findings noted)...
+  -> clinic-upload-fda45d12 : ready_for_review
+Uploading 00000079_000.png (Follow-up chest X-ray - patient reported chest discomfort)...
+  -> clinic-upload-cf475df7 : ready_for_review
+Uploading 00000061_002.png (Chest X-ray - shortness of breath on admission)...
+  -> clinic-upload-a302e54e : ready_for_review
+```
+
+### A real home page
+
+A second image became an actual landing page - the MedSyn Lab name, a short "Advanced Imaging Workspace" headline, and the three imaging types (X-ray, MRI, CT) laid out with connecting lines. That became the new `services/api/static/index.html`, with the old Studies dashboard renamed to `studies.html` so the address a browser lands on first (`/dashboard/`) is this landing page, not the study list. Three real links sit in the open space below the logo - Studies, Upload, Doctor Review - not baked into the picture, actual `<a>` tags styled to sit on top of it.
+
+Nav links across all four pages needed to carry the API key forward too, since a plain `<a href="...">` doesn't include the page's own `?api_key=...` on its own:
+
+```javascript
+if (apiKey) {
+  for (const link of document.querySelectorAll(".nav-links a")) {
+    link.href += (link.href.includes("?") ? "&" : "?") + `api_key=${encodeURIComponent(apiKey)}`;
+  }
+}
+```
+
+![The finished home page: MedSyn Lab logo top left, three nav links (Studies, Upload, Doctor Review) sitting directly beneath it with no overlap, and the full "Advanced Imaging Workspace" hero image visible at its correct width](images/step-28-home-page.png)
+
+### Doctor-controlled AI review policy
+
+AI no longer has to run automatically on every upload. A doctor can turn that off from the Doctor Review page, so a study instead waits for a doctor to run it explicitly - real control over whether AI touches a study on its own or only after a doctor chooses to run it, which matters if a department wants a human gating that step rather than letting it happen on every upload by default.
+
+```python
+APP_SETTINGS = {"auto_ai_default": True}
+```
+
+A plain in-memory value, not a new database table (same demo-grade limitation as elsewhere in this project - it resets to "on" if the API container restarts). `GET /settings` and `POST /settings` read and write it. `POST /studies/upload` falls back to this value whenever the upload request doesn't say otherwise, which is now the normal case - the Upload page no longer asks the radiographer to decide, it just shows the current policy as text:
+
+![Radiographer Upload view with the policy off: current policy shown as text, and the checklist reading Received, Stored in MinIO, "AI evaluation skipped - a doctor will run it explicitly"](images/step-28-upload-policy-off.png)
+
+A skipped study sits at `awaiting_review` until a doctor opens it and clicks "Run AI Evaluation" - reusing the existing `POST /studies/{id}/infer` endpoint, which now also advances `workflow_status` to `ready_for_review` when called this way, the same as the automatic path already did:
+
+![Doctor Review view: Upload Review Policy panel with the checkbox unchecked, the selected study at "awaiting review", "No AI result yet" next to a Run AI Evaluation button](images/step-28-doctor-awaiting-review.png)
+
+![The same study after clicking Run AI Evaluation: "ready for review", a real finding, confidence, bucket, review flag, and heatmap](images/step-28-doctor-ai-result.png)
+
+Turning the policy back on returns to the original automatic path - a new upload goes straight to "ready for review" with no button needed:
+
+![Doctor Review view with the policy back on: a newly uploaded study already "ready for review" with a full AI result](images/step-28-doctor-auto-result.png)
+
+Nothing about a single, already-existing API endpoint changed behavior in this step. Every page the platform already had keeps working exactly as before; what's new is a way to get an image in from a browser, two pages built around that, a shared look across all four pages, a real home page tying them together, and a doctor-controlled switch for whether the AI step runs on its own or waits to be asked.

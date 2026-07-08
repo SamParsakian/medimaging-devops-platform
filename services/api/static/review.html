@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Doctor Review - MedSyn Lab</title>
+  <link rel="stylesheet" href="theme.css" />
+</head>
+<body>
+  <div class="app-layout">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-icon">&#9737;</div>
+        <div>
+          <div class="brand-name">MedSyn Lab</div>
+          <div class="brand-subtitle">Radiology Imaging Center</div>
+        </div>
+      </div>
+      <ul class="nav-links">
+        <li><a href="/dashboard/"><span class="icon">&#8962;</span> Home</a></li>
+        <li><a href="/dashboard/studies.html"><span class="icon">&#127968;</span> Studies</a></li>
+        <li><a href="/dashboard/upload.html"><span class="icon">&#9729;</span> Upload</a></li>
+        <li><a href="/dashboard/review.html" class="active"><span class="icon">&#129658;</span> Doctor Review</a></li>
+      </ul>
+    </aside>
+
+    <main class="main">
+      <p class="page-subtitle">Demo-grade viewer - no real patient data, no clinical use.</p>
+
+      <section class="card">
+        <h2>AI Model Configuration</h2>
+        <table class="detail-table" id="model-config-table">
+          <tr><td colspan="2">Loading model configuration...</td></tr>
+        </table>
+      </section>
+
+      <section class="card">
+        <h2>Upload Review Policy</h2>
+        <label style="display: flex; align-items: center; gap: 0.5rem;">
+          <input type="checkbox" id="auto-ai-toggle" style="margin: 0;" />
+          <span style="color: var(--text-primary); font-size: 0.9rem;">Run AI automatically on new uploads</span>
+        </label>
+        <p class="page-subtitle" style="margin: 0.5rem 0 0;">When off, a radiographer's upload is stored and waits for a doctor to run AI evaluation explicitly from this page - it never runs on its own.</p>
+      </section>
+
+      <div style="display: flex; gap: 1.5rem; align-items: flex-start; flex-wrap: wrap;">
+        <section class="card" style="flex: 1; min-width: 300px;">
+          <h2>New Studies</h2>
+          <div id="studies-list">
+            <p class="placeholder">Loading studies...</p>
+          </div>
+        </section>
+
+        <section class="card" id="study-detail" style="flex: 2; min-width: 360px;">
+          <h2>Study Review</h2>
+          <p class="placeholder">Select a study from the list to review it.</p>
+        </section>
+      </div>
+
+      <section class="card">
+        <h2>Recent Audit Events</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Event ID</th>
+              <th>Timestamp</th>
+              <th>User</th>
+              <th>Action</th>
+              <th>Study ID</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="audit-events-body">
+            <tr><td colspan="6">Loading audit events...</td></tr>
+          </tbody>
+        </table>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const studiesList = document.getElementById("studies-list");
+    const detailSection = document.getElementById("study-detail");
+    const auditBody = document.getElementById("audit-events-body");
+    const apiKey = new URLSearchParams(window.location.search).get("api_key") || "";
+
+    // Sidebar links are plain hrefs in the HTML - carry the key forward so
+    // clicking between pages doesn't land on one that then fails every
+    // fetch it makes (every dashboard page needs its own ?api_key=...).
+    if (apiKey) {
+      for (const link of document.querySelectorAll(".nav-links a")) {
+        link.href += (link.href.includes("?") ? "&" : "?") + `api_key=${encodeURIComponent(apiKey)}`;
+      }
+    }
+    const initialStudy = new URLSearchParams(window.location.search).get("study");
+
+    function apiFetch(url) {
+      return fetch(url, { headers: { "X-API-Key": apiKey } });
+    }
+
+    function withApiKey(url) {
+      const separator = url.includes("?") ? "&" : "?";
+      return apiKey ? `${url}${separator}api_key=${encodeURIComponent(apiKey)}` : url;
+    }
+
+    function statusPill(status) {
+      const label = (status || "").replace(/_/g, " ");
+      return `<span class="status ${status}"><span class="dot"></span>${label}</span>`;
+    }
+
+    // Same reasoning as Step 26's evaluation buckets: 0.5 is the model's
+    // own point of indifference, so a top finding sitting right on that
+    // line ("uncertain") is the case genuinely worth a second look - a
+    // low-confidence or a clearly-confident top finding are each, in
+    // their own way, a clearer signal than one sitting right on the line.
+    function confidenceBucket(confidence) {
+      if (confidence == null) return null;
+      if (confidence >= 0.7) return "stronger_signal";
+      if (confidence >= 0.5) return "uncertain";
+      return "low";
+    }
+
+    function reviewFlag(bucket) {
+      return bucket === "uncertain"
+        ? '<span class="status ai_processing"><span class="dot"></span>Review Needed</span>'
+        : '<span class="status ready_for_review"><span class="dot"></span>Clear</span>';
+    }
+
+    async function loadModelConfig() {
+      const table = document.getElementById("model-config-table");
+      try {
+        const response = await apiFetch("/ai-config");
+        const config = await response.json();
+        if (!response.ok) {
+          table.innerHTML = `<tr><td colspan="2" class="error-text">${config.detail ?? "Could not load model configuration"}</td></tr>`;
+          return;
+        }
+        table.innerHTML = `
+          <tr><th>X-ray Model</th><td>${config.xray_model_name} (v${config.xray_model_version})</td></tr>
+          <tr><th>Confidence Threshold</th><td>${config.confidence_threshold}</td></tr>
+          <tr><th>Top Findings Shown</th><td>${config.top_findings_count}</td></tr>
+          <tr><th>Heatmap Target Rule</th><td>${config.heatmap_target_rule}</td></tr>
+          <tr><th>Runtime Mode</th><td>${config.runtime_mode}</td></tr>
+        `;
+      } catch (err) {
+        table.innerHTML = `<tr><td colspan="2" class="error-text">Could not reach the API.</td></tr>`;
+      }
+    }
+
+    async function loadAutoAiSetting() {
+      const toggle = document.getElementById("auto-ai-toggle");
+      try {
+        const response = await apiFetch("/settings");
+        const settings = await response.json();
+        toggle.checked = !!settings.auto_ai_default;
+      } catch (err) {
+        // Leave the toggle at its default (unchecked) if the setting can't
+        // be loaded - the radiographer's own policy note will show the
+        // same "could not load" message, so this isn't silently wrong.
+      }
+    }
+
+    document.getElementById("auto-ai-toggle").addEventListener("change", async (event) => {
+      await fetch("/settings", {
+        method: "POST",
+        headers: { "X-API-Key": apiKey, "Content-Type": "application/json" },
+        body: JSON.stringify({ auto_ai_default: event.target.checked }),
+      });
+    });
+
+    async function loadAuditEvents() {
+      const response = await apiFetch("/audit-events");
+      const events = await response.json();
+      auditBody.innerHTML = events
+        .map(
+          (event) => `
+            <tr>
+              <td>${event.event_id}</td>
+              <td>${event.timestamp ?? ""}</td>
+              <td>${event.user_id}</td>
+              <td>${event.action}</td>
+              <td>${event.study_id ?? ""}</td>
+              <td>${event.status}</td>
+            </tr>
+          `
+        )
+        .join("");
+    }
+
+    async function wasReviewed(studyId) {
+      const response = await apiFetch(`/audit-events?study_id=${encodeURIComponent(studyId)}`);
+      const events = await response.json();
+      return events.some((e) => e.action === "view_study");
+    }
+
+    async function loadStudies() {
+      const response = await apiFetch("/studies");
+      const studies = await response.json();
+      const newStudies = studies
+        .filter((s) => s.workflow_status)
+        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+      if (newStudies.length === 0) {
+        studiesList.innerHTML = `<p class="placeholder">No clinic-workflow studies yet.</p>`;
+        loadAuditEvents();
+        return;
+      }
+
+      const reviewedFlags = await Promise.all(
+        newStudies.map((s) => (s.workflow_status === "ready_for_review" ? wasReviewed(s.orthanc_study_id) : false))
+      );
+
+      studiesList.innerHTML = newStudies
+        .map((s, i) => {
+          const status = reviewedFlags[i] ? "reviewed" : s.workflow_status;
+          return `
+            <div class="study-row" data-study-id="${s.orthanc_study_id}">
+              <img class="thumb" src="${withApiKey(`/studies/${s.orthanc_study_id}/preview-image`)}" alt="" />
+              <div class="study-row-main">
+                <div class="study-row-id">${s.orthanc_study_id}</div>
+                <div class="study-row-desc">${s.study_description ?? ""}</div>
+              </div>
+              ${statusPill(status)}
+            </div>
+          `;
+        })
+        .join("");
+
+      for (const row of studiesList.querySelectorAll(".study-row")) {
+        row.addEventListener("click", () => loadStudyDetail(row.dataset.studyId));
+      }
+
+      loadAuditEvents();
+
+      const target = initialStudy && newStudies.some((s) => s.orthanc_study_id === initialStudy)
+        ? initialStudy
+        : null;
+      if (target) loadStudyDetail(target);
+    }
+
+    async function loadStudyDetail(studyId) {
+      for (const row of studiesList.querySelectorAll(".study-row")) {
+        row.classList.toggle("selected", row.dataset.studyId === studyId);
+      }
+
+      const [study, previewInfo, aiResults] = await Promise.all([
+        apiFetch(`/studies/${studyId}`).then((r) => r.json()),
+        apiFetch(`/studies/${studyId}/preview-info`).then((r) => r.json()),
+        apiFetch(`/studies/${studyId}/ai-results`).then((r) => r.json()),
+      ]);
+
+      const previewBlock = previewInfo.available
+        ? `<img class="preview-image" src="${withApiKey(`/studies/${studyId}/preview-image`)}" alt="X-ray for ${studyId}" />`
+        : `<p class="placeholder">No image available for this study.</p>`;
+
+      let resultBlock = `
+        <p class="placeholder">No AI result yet for this study.</p>
+        <button class="btn-primary" id="run-ai-btn" type="button" ${previewInfo.available ? "" : "disabled"}>Run AI Evaluation</button>
+        <div id="run-ai-status"></div>
+      `;
+      if (aiResults.length > 0) {
+        const result = aiResults[0];
+        const bucket = confidenceBucket(result.confidence);
+        const findingsRows = (result.top_findings ?? [])
+          .map((f) => `<tr><td>${f.label}</td><td>${(f.probability * 100).toFixed(1)}%</td></tr>`)
+          .join("");
+        const heatmapBlock = result.heatmap_object
+          ? `<img class="heatmap-image" src="${withApiKey(`/studies/${studyId}/ai-results/${result.result_id}/heatmap-image`)}" alt="AI heatmap for ${studyId}" />`
+          : `<p class="placeholder">No heatmap for this result.</p>`;
+
+        resultBlock = `
+          <table class="detail-table">
+            <tr><th>Top Finding</th><td>${result.prediction_label}</td></tr>
+            <tr><th>Confidence</th><td>${(result.confidence * 100).toFixed(1)}%</td></tr>
+            <tr><th>Confidence Bucket</th><td>${bucket ?? ""}</td></tr>
+            <tr><th>Review Flag</th><td>${reviewFlag(bucket)}</td></tr>
+          </table>
+          ${heatmapBlock}
+          <table class="detail-table" style="margin-top: 0.75rem;">
+            <thead><tr><th>Finding</th><th>Probability</th></tr></thead>
+            <tbody>${findingsRows}</tbody>
+          </table>
+          <p class="disclaimer">${result.disclaimer}</p>
+        `;
+      }
+
+      const errorRow = study.last_error
+        ? `<tr><th>Last Error</th><td class="error-text">${study.last_error}</td></tr>`
+        : "";
+
+      detailSection.innerHTML = `
+        <h2>Study Review</h2>
+        <table class="detail-table">
+          <tr><th>Study</th><td>${study.orthanc_study_id}</td></tr>
+          <tr><th>Description</th><td>${study.study_description ?? ""}</td></tr>
+          <tr><th>Workflow Status</th><td>${statusPill(study.workflow_status)}</td></tr>
+          ${errorRow}
+        </table>
+        ${previewBlock}
+        <h2 style="margin-top: 1.25rem;">AI Result</h2>
+        ${resultBlock}
+      `;
+
+      const runAiBtn = document.getElementById("run-ai-btn");
+      if (runAiBtn) {
+        runAiBtn.addEventListener("click", () => runAiEvaluation(studyId));
+      }
+
+      loadAuditEvents();
+    }
+
+    async function runAiEvaluation(studyId) {
+      const button = document.getElementById("run-ai-btn");
+      const statusBox = document.getElementById("run-ai-status");
+      button.disabled = true;
+      statusBox.innerHTML = `<p class="placeholder">Running AI evaluation...</p>`;
+      try {
+        const response = await fetch(`/studies/${studyId}/infer`, {
+          method: "POST",
+          headers: { "X-API-Key": apiKey },
+        });
+        const data = await response.json();
+        if (!response.ok) {
+          statusBox.innerHTML = `<p class="error-text">${data.detail ?? "AI evaluation failed"}</p>`;
+          button.disabled = false;
+          return;
+        }
+        // Reload both the detail panel (now has a result) and the list
+        // (the status pill moves from "awaiting review" to "ready for
+        // review") - the same doctor-triggered path a radiographer's
+        // auto_ai=false upload is waiting on.
+        await loadStudies();
+        await loadStudyDetail(studyId);
+      } catch (err) {
+        statusBox.innerHTML = `<p class="error-text">Could not reach the API.</p>`;
+        button.disabled = false;
+      }
+    }
+
+    loadModelConfig();
+    loadAutoAiSetting();
+    loadStudies();
+  </script>
+</body>
+</html>

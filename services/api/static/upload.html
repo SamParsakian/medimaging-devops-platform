@@ -1,0 +1,239 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Radiographer Upload - MedSyn Lab</title>
+  <link rel="stylesheet" href="theme.css" />
+</head>
+<body>
+  <div class="app-layout">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-icon">&#9737;</div>
+        <div>
+          <div class="brand-name">MedSyn Lab</div>
+          <div class="brand-subtitle">Radiology Imaging Center</div>
+        </div>
+      </div>
+      <ul class="nav-links">
+        <li><a href="/dashboard/"><span class="icon">&#8962;</span> Home</a></li>
+        <li><a href="/dashboard/studies.html"><span class="icon">&#127968;</span> Studies</a></li>
+        <li><a href="/dashboard/upload.html" class="active"><span class="icon">&#9729;</span> Upload</a></li>
+        <li><a href="/dashboard/review.html"><span class="icon">&#129658;</span> Doctor Review</a></li>
+      </ul>
+    </aside>
+
+    <main class="main">
+      <p class="page-subtitle">Demo-grade viewer - no real patient data, no clinical use.</p>
+
+      <section class="card">
+        <h2><span class="icon">&#9729;</span> Upload X-ray Image</h2>
+        <form id="upload-form">
+          <div class="dropzone" id="dropzone">
+            <span class="icon">&#8593;</span>
+            <span id="dropzone-text">Drop image here or <button type="button" id="browse-btn">browse</button></span>
+            <div class="filename" id="selected-filename"></div>
+          </div>
+          <input type="file" id="file-input" accept="image/*" hidden />
+          <label for="label-input">Optional note (e.g. clinical information)</label>
+          <input type="text" id="label-input" placeholder="e.g. patient case notes for this demo upload" />
+          <p class="page-subtitle" id="ai-policy-note" style="margin: 0.75rem 0 0;">Loading current AI review policy...</p>
+          <button type="submit" class="btn-primary" id="upload-btn" style="margin-top: 1rem;">&#8593; Upload Study</button>
+        </form>
+        <ul class="checklist" id="upload-checklist"></ul>
+      </section>
+
+      <section class="card">
+        <h2><span class="icon">&#128203;</span> Recent Studies</h2>
+        <div id="uploads-list">
+          <p class="placeholder">Loading...</p>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const apiKey = new URLSearchParams(window.location.search).get("api_key") || "";
+
+    // Sidebar links are plain hrefs in the HTML - carry the key forward so
+    // clicking between pages doesn't land on one that then fails every
+    // fetch it makes (every dashboard page needs its own ?api_key=...).
+    if (apiKey) {
+      for (const link of document.querySelectorAll(".nav-links a")) {
+        link.href += (link.href.includes("?") ? "&" : "?") + `api_key=${encodeURIComponent(apiKey)}`;
+      }
+    }
+    let selectedFile = null;
+
+    function apiFetch(url) {
+      return fetch(url, { headers: { "X-API-Key": apiKey } });
+    }
+
+    function withApiKey(url) {
+      const separator = url.includes("?") ? "&" : "?";
+      return apiKey ? `${url}${separator}api_key=${encodeURIComponent(apiKey)}` : url;
+    }
+
+    function statusPill(status) {
+      const label = (status || "").replace(/_/g, " ");
+      return `<span class="status ${status}"><span class="dot"></span>${label}</span>`;
+    }
+
+    async function loadAiPolicy() {
+      const note = document.getElementById("ai-policy-note");
+      try {
+        const response = await apiFetch("/settings");
+        const settings = await response.json();
+        note.textContent = settings.auto_ai_default
+          ? "Current policy (set by a doctor): AI runs automatically on upload."
+          : "Current policy (set by a doctor): uploads wait for a doctor to run AI evaluation explicitly.";
+      } catch (err) {
+        note.textContent = "Could not load the current AI review policy.";
+      }
+    }
+
+    function checklistItem(label, state) {
+      const icon = state === "done" ? "✓" : state === "failed" ? "✗" : "…";
+      return `<li class="${state}">${icon} ${label}</li>`;
+    }
+
+    const dropzone = document.getElementById("dropzone");
+    const fileInput = document.getElementById("file-input");
+    const browseBtn = document.getElementById("browse-btn");
+    const filenameLabel = document.getElementById("selected-filename");
+
+    function setSelectedFile(file) {
+      selectedFile = file;
+      filenameLabel.textContent = file ? `Selected: ${file.name}` : "";
+    }
+
+    browseBtn.addEventListener("click", () => fileInput.click());
+    dropzone.addEventListener("click", (event) => {
+      if (event.target !== browseBtn) fileInput.click();
+    });
+    fileInput.addEventListener("change", () => {
+      if (fileInput.files.length) setSelectedFile(fileInput.files[0]);
+    });
+    ["dragenter", "dragover"].forEach((eventName) => {
+      dropzone.addEventListener(eventName, (event) => {
+        event.preventDefault();
+        dropzone.classList.add("dragover");
+      });
+    });
+    ["dragleave", "drop"].forEach((eventName) => {
+      dropzone.addEventListener(eventName, (event) => {
+        event.preventDefault();
+        dropzone.classList.remove("dragover");
+      });
+    });
+    dropzone.addEventListener("drop", (event) => {
+      const files = event.dataTransfer.files;
+      if (files.length) setSelectedFile(files[0]);
+    });
+
+    async function wasReviewed(studyId) {
+      const response = await apiFetch(`/audit-events?study_id=${encodeURIComponent(studyId)}`);
+      const events = await response.json();
+      return events.some((e) => e.action === "view_study");
+    }
+
+    async function loadRecentUploads() {
+      const list = document.getElementById("uploads-list");
+      const response = await apiFetch("/studies");
+      const studies = await response.json();
+      const uploaded = studies
+        .filter((s) => s.workflow_status)
+        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+
+      if (uploaded.length === 0) {
+        list.innerHTML = `<p class="placeholder">No uploads yet.</p>`;
+        return;
+      }
+
+      const reviewedFlags = await Promise.all(
+        uploaded.map((s) => (s.workflow_status === "ready_for_review" ? wasReviewed(s.orthanc_study_id) : false))
+      );
+
+      list.innerHTML = uploaded
+        .map((s, i) => {
+          const status = reviewedFlags[i] ? "reviewed" : s.workflow_status;
+          const buttonLabel = status === "reviewed" ? "Result" : "Open";
+          return `
+            <div class="study-row">
+              <img class="thumb" src="${withApiKey(`/studies/${s.orthanc_study_id}/preview-image`)}" alt="" />
+              <div class="study-row-main">
+                <div class="study-row-id">${s.orthanc_study_id}</div>
+                <div class="study-row-desc">${s.study_description ?? ""}</div>
+              </div>
+              ${statusPill(status)}
+              <a class="btn btn-secondary" href="/dashboard/review.html?api_key=${encodeURIComponent(apiKey)}&study=${s.orthanc_study_id}">${buttonLabel}</a>
+            </div>
+          `;
+        })
+        .join("");
+    }
+
+    document.getElementById("upload-form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const labelInput = document.getElementById("label-input");
+      const button = document.getElementById("upload-btn");
+      const checklist = document.getElementById("upload-checklist");
+
+      if (!selectedFile) return;
+
+      button.disabled = true;
+      checklist.innerHTML = checklistItem("Uploading and storing in MinIO", "pending");
+
+      // No auto_ai field sent here on purpose - the server falls back to
+      // whatever the doctor currently has set via GET/POST /settings.
+      const formData = new FormData();
+      formData.append("file", selectedFile);
+      formData.append("label", labelInput.value);
+
+      try {
+        const response = await fetch("/studies/upload", {
+          method: "POST",
+          headers: { "X-API-Key": apiKey },
+          body: formData,
+        });
+        const data = await response.json();
+        if (!response.ok) {
+          checklist.innerHTML = checklistItem(data.detail ?? "Upload failed", "failed");
+          return;
+        }
+
+        const status = data.study.workflow_status;
+        const aiDone = status === "ready_for_review";
+        const failed = status === "failed";
+        const awaitingReview = status === "awaiting_review";
+        const aiStepItems = awaitingReview
+          ? [checklistItem("AI evaluation skipped - a doctor will run it explicitly", "pending")]
+          : [
+              checklistItem("AI processing", aiDone ? "done" : failed ? "failed" : "pending"),
+              checklistItem(
+                aiDone ? "Ready for review" : failed ? `Failed: ${data.study.last_error ?? "AI processing error"}` : "Ready for review",
+                aiDone ? "done" : failed ? "failed" : "pending"
+              ),
+            ];
+        checklist.innerHTML = [
+          checklistItem("Received", "done"),
+          checklistItem("Stored in MinIO", "done"),
+          ...aiStepItems,
+        ].join("");
+
+        setSelectedFile(null);
+        fileInput.value = "";
+        labelInput.value = "";
+        loadRecentUploads();
+      } catch (err) {
+        checklist.innerHTML = checklistItem("Could not reach the API", "failed");
+      } finally {
+        button.disabled = false;
+      }
+    });
+
+    loadAiPolicy();
+    loadRecentUploads();
+  </script>
+</body>
+</html>

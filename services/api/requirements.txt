@@ -4,3 +4,4 @@ psycopg2-binary
 minio
 prometheus-client
 requests
+python-multipart

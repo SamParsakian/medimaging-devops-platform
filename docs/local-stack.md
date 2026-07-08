@@ -133,17 +133,34 @@ curl -H "X-API-Key: changeme" http://localhost:8000/studies
 
 ## Dashboard
 
-`services/api/static/` is a small dashboard (plain HTML/CSS/JS, no framework) served by the same FastAPI service at `/dashboard/`. It shows the study list from `GET /studies` on the left, and clicking a row loads that study's detail on the right, including its preview image.
+`services/api/static/` holds four pages (plain HTML/CSS/JS, no framework), all served by the same FastAPI service at `/dashboard/` and all sharing one dark "MedSyn Lab" theme (`theme.css`):
 
-The dashboard's `<img>` tag points at `GET /studies/{id}/preview-image` instead of MinIO directly, since the `medimaging` bucket is private. That endpoint reads the study's `preview_object_path` from Postgres, then streams the object's bytes straight from MinIO through the API - the browser never needs MinIO credentials.
+```text
+index.html    - landing page with links to the other three
+studies.html  - the original study list and detail view (was index.html before Step 28)
+upload.html   - Radiographer Upload
+review.html   - Doctor Review
+```
 
-Since the dashboard is also behind the API key now, open it with the key in the URL once:
+`studies.html` shows the study list from `GET /studies` on the left, and clicking a row loads that study's detail on the right, including its preview image. Its `<img>` tag points at `GET /studies/{id}/preview-image` instead of MinIO directly, since the `medimaging` bucket is private - that endpoint reads the study's `preview_object_path` from Postgres, then streams the object's bytes straight from MinIO through the API, so the browser never needs MinIO credentials.
+
+Every dashboard page is behind the API key, so open the landing page with the key in the URL once:
 
 ```text
 http://localhost:8000/dashboard/?api_key=changeme
 ```
 
-The page reads the key from its own URL and attaches it to every API call it makes after that.
+Each page reads the key from its own URL and attaches it to every API call it makes after that; clicking any of the sidebar or landing-page links carries the same key forward to wherever it points, so the key only has to be typed once per visit.
+
+## Clinic workflow demo
+
+`upload.html` (Radiographer Upload) and `review.html` (Doctor Review) tell a small end-to-end story for the project's demo video - a radiographer uploads a new X-ray, the platform processes it, and a doctor reviews the result - reusing the same API endpoints and dashboard patterns already built in earlier steps, not a separate system. The landing page's background image and the clinic pages' background photo were both made by Sam himself with an AI image tool.
+
+`POST /studies/upload` (multipart form: `file`, optional `label`) is the one genuinely new endpoint. It creates a study for the uploaded image, stores it in MinIO, runs it through the same AI inference path `POST /studies/{id}/infer` already uses, and stores the result exactly like every other AI result in this project - updating a new `studies.workflow_status` column at each stage (`received` -> `stored` -> `ai_processing` -> `ready_for_review`, or `failed` with `last_error` set if anything after storage goes wrong). This column is separate from `processing_status`/`anonymization_status`/`preview_status`/`upload_status`, which track the older DICOM extract/anonymize/preview/upload pipeline from Steps 3 and 12 - a study uploaded through this new flow has no DICOM file and no anonymization step, so it doesn't belong on those columns; every study from an earlier step simply has `workflow_status = NULL`.
+
+The Doctor Review view lists every study with a non-null `workflow_status`, newest first, and shows the same information the main dashboard's AI result panel already shows (image, top findings, heatmap) plus a confidence bucket and a review flag computed the same way Step 26's evaluation buckets were: a top finding sitting near the model's own 0.5 indifference point is flagged `Review Needed`, anything more clearly high or low is `Clear`.
+
+`scripts/run-demo-workflow.sh` uploads 3 public sample X-rays (already used in Step 26's evaluation set, see `docs/sample-data.md`) through `POST /studies/upload` in one run, so the Doctor Review view has real studies to show without uploading through the browser by hand first.
 
 ## AI inference
 
