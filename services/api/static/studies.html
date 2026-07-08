@@ -1,0 +1,538 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Studies - MedSyn Lab</title>
+  <link rel="stylesheet" href="theme.css" />
+  <style>
+    /* Page-specific extras not covered by the shared theme.css - mostly
+       the study list table, the slice viewer, and the AI result block,
+       none of which the other two pages need. */
+    .layout {
+      display: flex;
+      gap: 1.5rem;
+      align-items: flex-start;
+      flex-wrap: wrap;
+    }
+
+    .study-list {
+      flex: 2;
+      min-width: 420px;
+    }
+
+    .study-list tbody tr {
+      cursor: pointer;
+    }
+
+    .study-list tbody tr:hover {
+      background: rgba(255, 255, 255, 0.04);
+    }
+
+    .mono {
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: 0.8rem;
+      word-break: break-all;
+      color: var(--text-secondary);
+    }
+
+    .slice-controls {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+      margin-top: 0.5rem;
+    }
+
+    .slice-controls .slice-label {
+      font-size: 0.85rem;
+      color: var(--text-secondary);
+      min-width: 6.5rem;
+      text-align: right;
+    }
+
+    .ai-inference {
+      margin-top: 1rem;
+      padding-top: 1rem;
+      border-top: 1px solid var(--card-border);
+    }
+
+    .findings-table {
+      margin-top: 0.75rem;
+    }
+
+    .findings-note {
+      margin-top: 0.5rem;
+      color: var(--text-secondary);
+      font-size: 0.78rem;
+    }
+
+    .heatmap-label {
+      margin: 0.75rem 0 0.25rem;
+      font-size: 0.85rem;
+      color: var(--text-secondary);
+    }
+
+    .heatmap-thumb {
+      width: 64px;
+      height: 64px;
+      object-fit: cover;
+      border: 1px solid var(--card-border);
+      border-radius: 4px;
+      display: block;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 0.1rem 0.55rem;
+      border-radius: 999px;
+      font-size: 0.78rem;
+    }
+
+    .badge.available, .badge.match { background: rgba(52, 211, 153, 0.15); color: var(--status-ready); }
+    .badge.unavailable { background: rgba(255, 255, 255, 0.08); color: var(--text-secondary); }
+    .badge.failed, .badge.mismatch { background: rgba(248, 113, 113, 0.15); color: var(--status-failed); }
+    .badge.pending, .badge.review_needed { background: rgba(251, 146, 60, 0.15); color: var(--status-processing); }
+  </style>
+</head>
+<body>
+  <div class="app-layout">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-icon">&#9737;</div>
+        <div>
+          <div class="brand-name">MedSyn Lab</div>
+          <div class="brand-subtitle">Radiology Imaging Center</div>
+        </div>
+      </div>
+      <ul class="nav-links">
+        <li><a href="/dashboard/"><span class="icon">&#8962;</span> Home</a></li>
+        <li><a href="/dashboard/studies.html" class="active"><span class="icon">&#127968;</span> Studies</a></li>
+        <li><a href="/dashboard/upload.html"><span class="icon">&#9729;</span> Upload</a></li>
+        <li><a href="/dashboard/review.html"><span class="icon">&#129658;</span> Doctor Review</a></li>
+      </ul>
+    </aside>
+
+    <main class="main">
+      <p class="page-subtitle">Demo-grade viewer - no real patient data, no clinical use.</p>
+
+      <section class="card">
+        <h2>AI Model Configuration</h2>
+        <table class="detail-table" id="model-config-table">
+          <tr><td colspan="2">Loading model configuration...</td></tr>
+        </table>
+      </section>
+
+      <section class="card">
+        <h2>X-ray Model Evaluation</h2>
+        <table class="detail-table evaluation-summary" id="evaluation-summary-table" style="max-width: 640px; margin-bottom: 1rem;">
+          <tr><td colspan="2">Loading evaluation summary...</td></tr>
+        </table>
+        <table id="evaluation-samples-table">
+          <thead>
+            <tr>
+              <th>Sample</th>
+              <th>Expected</th>
+              <th>Top Finding</th>
+              <th>Confidence</th>
+              <th>Bucket</th>
+              <th>Flag</th>
+              <th>Inference Time</th>
+              <th>Heatmap</th>
+            </tr>
+          </thead>
+          <tbody id="evaluation-samples-body">
+            <tr><td colspan="8">Loading evaluation samples...</td></tr>
+          </tbody>
+        </table>
+      </section>
+
+      <main class="layout">
+        <section class="card study-list">
+          <h2>Studies</h2>
+          <table>
+            <thead>
+              <tr>
+                <th>Orthanc Study ID</th>
+                <th>Modality</th>
+                <th>Study Date</th>
+                <th>Patient ID</th>
+                <th>Status</th>
+                <th>Preview</th>
+              </tr>
+            </thead>
+            <tbody id="studies-body">
+              <tr><td colspan="6">Loading studies...</td></tr>
+            </tbody>
+          </table>
+        </section>
+
+        <section class="card" id="study-detail" style="flex: 1; min-width: 320px;">
+          <h2>Study Detail</h2>
+          <p class="placeholder">Select a study from the list to see details.</p>
+        </section>
+      </main>
+
+      <section class="card">
+        <h2>Recent Audit Events</h2>
+        <table>
+          <thead>
+            <tr>
+              <th>Event ID</th>
+              <th>Timestamp</th>
+              <th>User</th>
+              <th>Action</th>
+              <th>Study ID</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody id="audit-events-body">
+            <tr><td colspan="6">Loading audit events...</td></tr>
+          </tbody>
+        </table>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const studiesBody = document.getElementById("studies-body");
+    const detailSection = document.getElementById("study-detail");
+    const auditBody = document.getElementById("audit-events-body");
+
+    // Read once from the page's own URL, e.g. /dashboard/?api_key=... - the
+    // same key is then sent as a header on every API call this page makes.
+    const apiKey = new URLSearchParams(window.location.search).get("api_key") || "";
+
+    // Sidebar links are plain hrefs in the HTML - carry the key forward so
+    // clicking between pages doesn't land on one that then fails every
+    // fetch it makes (every dashboard page needs its own ?api_key=...).
+    if (apiKey) {
+      for (const link of document.querySelectorAll(".nav-links a")) {
+        link.href += (link.href.includes("?") ? "&" : "?") + `api_key=${encodeURIComponent(apiKey)}`;
+      }
+    }
+
+    function apiFetch(url) {
+      return fetch(url, { headers: { "X-API-Key": apiKey } });
+    }
+
+    function apiPost(url) {
+      return fetch(url, { method: "POST", headers: { "X-API-Key": apiKey } });
+    }
+
+    function withApiKey(url) {
+      const separator = url.includes("?") ? "&" : "?";
+      return apiKey ? `${url}${separator}api_key=${encodeURIComponent(apiKey)}` : url;
+    }
+
+    function previewBadge(study) {
+      return study.preview_object_path
+        ? '<span class="badge available">available</span>'
+        : '<span class="badge unavailable">not available</span>';
+    }
+
+    function statusBadge(status) {
+      const cls = status === "done" ? "available" : status === "failed" ? "failed" : "pending";
+      return `<span class="badge ${cls}">${status}</span>`;
+    }
+
+    async function loadModelConfig() {
+      const table = document.getElementById("model-config-table");
+      try {
+        const response = await apiFetch("/ai-config");
+        const config = await response.json();
+        if (!response.ok) {
+          table.innerHTML = `<tr><td colspan="2" class="error-text">${config.detail ?? "Could not load model configuration"}</td></tr>`;
+          return;
+        }
+        table.innerHTML = `
+          <tr><th>X-ray Model</th><td>${config.xray_model_name} (v${config.xray_model_version})</td></tr>
+          <tr><th>Weights</th><td>${config.xray_weights}</td></tr>
+          <tr><th>Source</th><td>${config.xray_model_source}</td></tr>
+          <tr><th>Input Size</th><td>${config.xray_input_size} x ${config.xray_input_size}</td></tr>
+          <tr><th>Preprocessing</th><td>${config.xray_preprocessing}</td></tr>
+          <tr><th>Top Findings Shown</th><td>${config.top_findings_count}</td></tr>
+          <tr><th>Confidence Threshold</th><td>${config.confidence_threshold}</td></tr>
+          <tr><th>Heatmap Target Rule</th><td>${config.heatmap_target_rule}</td></tr>
+          <tr><th>Runtime Mode</th><td>${config.runtime_mode}</td></tr>
+          <tr><th>Fallback Model</th><td>${config.fallback_model_name} (v${config.fallback_model_version})</td></tr>
+        `;
+      } catch (err) {
+        table.innerHTML = `<tr><td colspan="2" class="error-text">Could not reach the API.</td></tr>`;
+      }
+    }
+
+    function evaluationBadge(status) {
+      const cls = status === "match" ? "match" : status === "review_needed" ? "review_needed" : "mismatch";
+      const label = status === "match" ? "Match" : status === "review_needed" ? "Review" : "Mismatch";
+      return `<span class="badge ${cls}">${label}</span>`;
+    }
+
+    async function loadEvaluation() {
+      const summaryTable = document.getElementById("evaluation-summary-table");
+      const samplesBody = document.getElementById("evaluation-samples-body");
+      try {
+        const [summary, samples] = await Promise.all([
+          apiFetch("/evaluation/summary").then((r) => r.json()),
+          apiFetch("/evaluation/samples").then((r) => r.json()),
+        ]);
+
+        if (summary.total_samples === 0) {
+          summaryTable.innerHTML =
+            `<tr><td colspan="2">No evaluation run yet - run evaluation/run_evaluation.py against the live stack.</td></tr>`;
+        } else {
+          summaryTable.innerHTML = `
+            <tr><th>Total Samples</th><td>${summary.total_samples}</td></tr>
+            <tr><th>Normal / Abnormal</th><td>${summary.normal_count} / ${summary.abnormal_count}</td></tr>
+            <tr><th>Match / Review / Mismatch</th><td>${summary.match_count} / ${summary.review_needed_count} / ${summary.mismatch_count}</td></tr>
+            <tr><th>Average Inference Time</th><td>${summary.average_inference_time_ms} ms</td></tr>
+            <tr><th>Threshold Used</th><td>${summary.threshold_used}</td></tr>
+          `;
+        }
+
+        samplesBody.innerHTML = "";
+        for (const sample of samples) {
+          const row = document.createElement("tr");
+          const confidenceText = sample.top_confidence != null
+            ? `${(sample.top_confidence * 100).toFixed(1)}%`
+            : "";
+          const heatmapCell = sample.ai_result_id
+            ? `<img class="heatmap-thumb" src="${withApiKey(`/studies/${sample.orthanc_study_id}/ai-results/${sample.ai_result_id}/heatmap-image`)}" alt="Heatmap for ${sample.sample_id}" />`
+            : "n/a";
+          row.innerHTML = `
+            <td>${sample.sample_id}</td>
+            <td>${sample.expected_label} (${sample.expected_group})</td>
+            <td>${sample.top_finding ?? ""}</td>
+            <td>${confidenceText}</td>
+            <td>${sample.confidence_bucket ?? ""}</td>
+            <td>${evaluationBadge(sample.match_status)}</td>
+            <td>${sample.inference_time_ms ?? ""} ms</td>
+            <td>${heatmapCell}</td>
+          `;
+          samplesBody.appendChild(row);
+        }
+      } catch (err) {
+        summaryTable.innerHTML = `<tr><td colspan="2" class="error-text">Could not load evaluation data.</td></tr>`;
+        samplesBody.innerHTML = `<tr><td colspan="8" class="error-text">Could not load evaluation data.</td></tr>`;
+      }
+    }
+
+    async function loadStudies() {
+      const response = await apiFetch("/studies");
+      const studies = await response.json();
+
+      studiesBody.innerHTML = "";
+      for (const study of studies) {
+        const row = document.createElement("tr");
+        row.innerHTML = `
+          <td>${study.orthanc_study_id}</td>
+          <td>${study.modality ?? ""}</td>
+          <td>${study.study_date ?? ""}</td>
+          <td>${study.patient_id ?? ""}</td>
+          <td>${statusBadge(study.processing_status)}</td>
+          <td>${previewBadge(study)}</td>
+        `;
+        row.addEventListener("click", () => loadStudyDetail(study.orthanc_study_id));
+        studiesBody.appendChild(row);
+      }
+
+      loadAuditEvents();
+    }
+
+    async function loadAuditEvents() {
+      const response = await apiFetch("/audit-events");
+      const events = await response.json();
+
+      auditBody.innerHTML = "";
+      for (const event of events) {
+        const row = document.createElement("tr");
+        row.innerHTML = `
+          <td>${event.event_id}</td>
+          <td>${event.timestamp ?? ""}</td>
+          <td>${event.user_id}</td>
+          <td>${event.action}</td>
+          <td>${event.study_id ?? ""}</td>
+          <td>${event.status}</td>
+        `;
+        auditBody.appendChild(row);
+      }
+    }
+
+    // Slice navigation state for the study currently open in the detail
+    // panel - only used when that study has more than one slice preview.
+    let currentSlices = [];
+    let currentSliceIndex = 0;
+
+    function sliceImageUrl(studyId, sliceIndex) {
+      return withApiKey(`/studies/${studyId}/slices/${sliceIndex}/preview-image`);
+    }
+
+    function updateSliceView(studyId) {
+      const slice = currentSlices[currentSliceIndex];
+      document.getElementById("slice-image").src = sliceImageUrl(studyId, slice.slice_index);
+      document.getElementById("slice-label").textContent =
+        `Slice ${currentSliceIndex + 1} of ${currentSlices.length} (instance ${slice.instance_number})`;
+      document.getElementById("slice-slider").value = currentSliceIndex;
+      document.getElementById("slice-prev").disabled = currentSliceIndex === 0;
+      document.getElementById("slice-next").disabled = currentSliceIndex === currentSlices.length - 1;
+    }
+
+    function setupSliceViewer(studyId, slices) {
+      currentSlices = slices;
+      // Start in the middle of the series rather than at slice 0, since
+      // the first and last slices of a real scan are often the least
+      // recognizable (edge of the anatomy, not the center of it).
+      currentSliceIndex = Math.floor(slices.length / 2);
+
+      document.getElementById("slice-prev").addEventListener("click", () => {
+        if (currentSliceIndex > 0) {
+          currentSliceIndex -= 1;
+          updateSliceView(studyId);
+        }
+      });
+      document.getElementById("slice-next").addEventListener("click", () => {
+        if (currentSliceIndex < currentSlices.length - 1) {
+          currentSliceIndex += 1;
+          updateSliceView(studyId);
+        }
+      });
+      document.getElementById("slice-slider").addEventListener("input", (event) => {
+        currentSliceIndex = Number(event.target.value);
+        updateSliceView(studyId);
+      });
+
+      updateSliceView(studyId);
+    }
+
+    function renderAiResult(data, studyId) {
+      const findings = data.top_findings ?? [{ label: data.prediction_label, probability: data.confidence }];
+      const findingsRows = findings
+        .map((f) => `<tr><td>${f.label}</td><td>${(f.probability * 100).toFixed(1)}%</td></tr>`)
+        .join("");
+
+      // Each row is the model's own independent probability for that one
+      // finding, not a diagnosis - values near 50% mean it isn't confident
+      // either way, which is worth spelling out since it applies to every
+      // finding shown, not just the top one.
+      const findingsNote = data.mode === "xray"
+        ? `<p class="findings-note">Each row is the model's own probability for that finding, not a diagnosis. Values near 50% mean it isn't confident either way.</p>`
+        : "";
+
+      // Only X-ray results carry a heatmap - the stat classifier has
+      // nothing to point at, and a heatmap can be missing even in xray
+      // mode if generating it failed (the finding result is kept either way).
+      const heatmapBlock = data.heatmap_object && data.result_id
+        ? `
+          <p class="heatmap-label">Heatmap for top finding (${data.prediction_label}):</p>
+          <img class="heatmap-image" src="${withApiKey(`/studies/${studyId}/ai-results/${data.result_id}/heatmap-image`)}" alt="AI heatmap for ${data.prediction_label}" />
+        `
+        : "";
+
+      return `
+        <table class="detail-table">
+          <tr><th>Model</th><td>${data.model_name} (v${data.model_version})</td></tr>
+          <tr><th>Mode</th><td>${data.mode ?? "stat"}</td></tr>
+          <tr><th>Inference Time</th><td>${data.inference_time_ms} ms</td></tr>
+        </table>
+        ${heatmapBlock}
+        <table class="detail-table findings-table">
+          <thead><tr><th>Finding</th><th>Probability</th></tr></thead>
+          <tbody>${findingsRows}</tbody>
+        </table>
+        ${findingsNote}
+        <p class="disclaimer">${data.disclaimer}</p>
+      `;
+    }
+
+    async function runInference(studyId) {
+      const resultBox = document.getElementById("inference-result");
+      resultBox.innerHTML = "<p>Running...</p>";
+      try {
+        const response = await apiPost(`/studies/${studyId}/infer`);
+        const data = await response.json();
+        if (!response.ok) {
+          resultBox.innerHTML = `<p class="error-text">${data.detail ?? "Inference failed"}</p>`;
+          return;
+        }
+        resultBox.innerHTML = renderAiResult(data, studyId);
+      } catch (err) {
+        resultBox.innerHTML = `<p class="error-text">Could not reach the AI inference service.</p>`;
+      }
+    }
+
+    async function loadStudyDetail(studyId) {
+      const [study, previewInfo, slices, aiResults] = await Promise.all([
+        apiFetch(`/studies/${studyId}`).then((r) => r.json()),
+        apiFetch(`/studies/${studyId}/preview-info`).then((r) => r.json()),
+        apiFetch(`/studies/${studyId}/slices`).then((r) => r.json()),
+        apiFetch(`/studies/${studyId}/ai-results`).then((r) => r.json()),
+      ]);
+
+      // A study with registered slices gets Previous/Next/slider
+      // navigation instead of the single static preview image. <img>
+      // can't send a custom header, so both kinds of preview image are
+      // authenticated via the api_key query parameter instead of X-API-Key.
+      let previewBlock;
+      if (slices.length > 0) {
+        previewBlock = `
+          <div class="slice-viewer">
+            <img class="preview-image" id="slice-image" alt="Study slice preview" />
+            <div class="slice-controls">
+              <button class="btn-secondary" id="slice-prev" type="button">&larr; Prev</button>
+              <input type="range" id="slice-slider" min="0" max="${slices.length - 1}" value="0" />
+              <button class="btn-secondary" id="slice-next" type="button">Next &rarr;</button>
+              <span class="slice-label" id="slice-label"></span>
+            </div>
+          </div>
+        `;
+      } else if (previewInfo.available) {
+        previewBlock = `<img class="preview-image" src="${withApiKey(`/studies/${studyId}/preview-image`)}" alt="Study preview" />`;
+      } else {
+        previewBlock = `<p class="placeholder">No preview available for this study.</p>`;
+      }
+
+      const errorRow = study.last_error
+        ? `<tr><th>Last Error</th><td class="error-text">${study.last_error}</td></tr>`
+        : "";
+
+      const latestAiResult = aiResults.length > 0
+        ? renderAiResult(aiResults[0], studyId)
+        : `<p class="placeholder">No AI result yet for this study.</p>`;
+
+      detailSection.innerHTML = `
+        <h2>Study Detail</h2>
+        <table class="detail-table">
+          <tr><th>Orthanc Study ID</th><td>${study.orthanc_study_id}</td></tr>
+          <tr><th>Study Instance UID</th><td class="mono">${study.study_instance_uid}</td></tr>
+          <tr><th>Patient ID</th><td>${study.patient_id ?? ""}</td></tr>
+          <tr><th>Modality</th><td>${study.modality ?? ""}</td></tr>
+          <tr><th>Study Date</th><td>${study.study_date ?? ""}</td></tr>
+          <tr><th>Study Description</th><td>${study.study_description ?? ""}</td></tr>
+          <tr><th>Series / Instances</th><td>${study.series_count} / ${study.instance_count}</td></tr>
+          <tr><th>Metadata Status</th><td>${statusBadge(study.processing_status)}</td></tr>
+          <tr><th>Anonymization Status</th><td>${statusBadge(study.anonymization_status)}</td></tr>
+          <tr><th>Preview Status</th><td>${statusBadge(study.preview_status)}</td></tr>
+          <tr><th>Upload Status</th><td>${statusBadge(study.upload_status)}</td></tr>
+          ${errorRow}
+          <tr><th>MinIO Preview Path</th><td class="mono">${previewInfo.preview_object_path ?? "n/a"}</td></tr>
+        </table>
+        ${previewBlock}
+        <div class="ai-inference">
+          <button class="btn-primary" id="run-inference-btn" type="button" ${previewInfo.available ? "" : "disabled"}>Run AI Demo Inference</button>
+          <div id="inference-result">${latestAiResult}</div>
+        </div>
+      `;
+
+      if (slices.length > 0) {
+        setupSliceViewer(studyId, slices);
+      }
+
+      document.getElementById("run-inference-btn").addEventListener("click", () => runInference(studyId));
+
+      loadAuditEvents();
+    }
+
+    loadModelConfig();
+    loadEvaluation();
+    loadStudies();
+  </script>
+</body>
+</html>

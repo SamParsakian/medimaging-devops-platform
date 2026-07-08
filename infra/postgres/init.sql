@@ -22,7 +22,15 @@ CREATE TABLE IF NOT EXISTS studies (
     upload_status TEXT NOT NULL DEFAULT 'pending',
     last_error TEXT,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    -- workflow_status is separate from processing/anonymization/preview/
+    -- upload_status above - those track the DICOM extract/anonymize/
+    -- preview/upload pipeline (Step 3/12). workflow_status instead tracks
+    -- the clinic upload flow (Step 28): a study uploaded straight through
+    -- POST /studies/upload moves received -> stored -> ai_processing ->
+    -- ready_for_review (or failed), and stays NULL for every study that
+    -- came from an earlier step's pipeline or script instead.
+    workflow_status TEXT
 );
 
 -- Basic audit trail for the API: who looked at what, and when.

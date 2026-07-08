@@ -7,14 +7,16 @@ a basic audit trail of who looked at what. No real auth yet - one
 fixed demo user, protected by a single shared API key.
 """
 
+import io
 import json
 import os
 import time
+import uuid
 from datetime import datetime, timezone
 
 import psycopg2
 import requests
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from minio import Minio
@@ -77,11 +79,26 @@ DEMO_DATA_ONLY = True
 # No real auth yet - every request is logged under this one demo user.
 DEMO_USER_ID = "demo-user"
 
+# Doctor-controlled default for new uploads (Step 28): whether a radiographer's
+# upload runs AI immediately or waits for a doctor to trigger it explicitly
+# from the Doctor Review view. In-memory only, same demo-grade limitation as
+# everything else here without a real settings table - it resets to True if
+# the api container restarts, which is fine for a local demo.
+APP_SETTINGS = {"auto_ai_default": True}
+
 # Demo-grade security: one shared API key from the environment, checked
 # against either the X-API-Key header or an api_key query parameter (the
 # query param exists so a browser can load /dashboard/?api_key=... directly).
 API_SECRET_KEY = os.environ.get("API_SECRET_KEY", "changeme")
 PUBLIC_PATHS = {"/health", "/docs", "/openapi.json", "/redoc", "/metrics"}
+# The dashboard's shared stylesheet and background image (Step 28) are
+# loaded by the browser itself, not by this project's own fetch() calls -
+# a <link rel="stylesheet"> tag and a CSS url() never carry the page's own
+# ?api_key= query string or an X-API-Key header, only the page navigation
+# itself does. Neither file holds any patient/study data, so they're public
+# the same way /docs already is, instead of needing every dashboard page to
+# go back to inlining its CSS (the workaround Step 10 used before this).
+PUBLIC_PATH_PREFIXES = ("/dashboard/theme.css", "/dashboard/images/")
 
 app = FastAPI(title="Medical Imaging Study API")
 
@@ -98,7 +115,7 @@ async def require_api_key(request: Request, call_next):
     method = request.method
     path = request.url.path
 
-    if path not in PUBLIC_PATHS:
+    if path not in PUBLIC_PATHS and not path.startswith(PUBLIC_PATH_PREFIXES):
         provided_key = request.headers.get("X-API-Key") or request.query_params.get("api_key")
 
         if not provided_key:
@@ -134,7 +151,7 @@ STUDY_COLUMNS = (
     "orthanc_study_id, study_instance_uid, patient_id, modality, "
     "study_date, study_description, series_count, instance_count, "
     "processing_status, preview_object_path, anonymization_status, "
-    "preview_status, upload_status, last_error"
+    "preview_status, upload_status, last_error, workflow_status, created_at"
 )
 
 AUDIT_COLUMNS = "event_id, user_id, action, study_id, timestamp, ip_address, status"
@@ -187,6 +204,8 @@ def row_to_study(row):
         "preview_status": row[11],
         "upload_status": row[12],
         "last_error": row[13],
+        "workflow_status": row[14],
+        "created_at": row[15].isoformat() if row[15] else None,
     }
 
 
@@ -280,6 +299,24 @@ def store_ai_result(study_id, result):
         conn.close()
 
 
+def set_workflow_status(study_id, workflow_status, last_error=None):
+    """Updates a study's workflow_status (see infra/postgres/init.sql) as
+    POST /studies/upload works through received -> stored -> ai_processing
+    -> ready_for_review/failed, so the current stage is visible to anyone
+    looking at the study, not only revealed once the whole request finishes."""
+    conn = get_connection()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE studies SET workflow_status = %s, last_error = %s, "
+                    "updated_at = now() WHERE orthanc_study_id = %s",
+                    (workflow_status, last_error, study_id),
+                )
+    finally:
+        conn.close()
+
+
 def log_audit_event(request: Request, action: str, study_id, status: str):
     ip_address = request.client.host if request.client else None
     conn = get_connection()
@@ -325,6 +362,22 @@ def metrics():
     return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
+@app.get("/settings")
+def get_settings():
+    """The doctor-controlled default from the Doctor Review view - whether
+    a new upload runs AI automatically or waits for an explicit doctor
+    trigger. The Radiographer Upload view reads this too, so a radiographer
+    can see the current policy without being able to change it themselves."""
+    return dict(APP_SETTINGS)
+
+
+@app.post("/settings")
+def update_settings(request: Request, auto_ai_default: bool = Body(..., embed=True)):
+    APP_SETTINGS["auto_ai_default"] = auto_ai_default
+    log_audit_event(request, "update_settings", None, "success")
+    return dict(APP_SETTINGS)
+
+
 @app.get("/ai-config")
 def get_ai_config():
     """Proxies ai-inference's own /config endpoint, so the dashboard
@@ -339,6 +392,102 @@ def get_ai_config():
         raise HTTPException(status_code=502, detail="AI inference service returned an error")
 
     return response.json()
+
+
+@app.post("/studies/upload")
+async def upload_study(
+    request: Request, file: UploadFile = File(...), label: str = Form(""),
+    auto_ai: str | None = Form(None),
+):
+    """The Radiographer Upload view's endpoint (Step 28): takes a plain
+    image file straight from the browser (no DICOM, no Orthanc - same
+    "already a PNG" shortcut Steps 24/26 used for their own X-ray samples),
+    creates a new study for it, and walks it through the same pipeline a
+    real upload would need: store the file, run it through the existing
+    AI inference path, and record the result - updating workflow_status at
+    each stage so the current step is visible on the studies list the whole
+    time, not only once everything finishes. Whether AI runs automatically
+    is the doctor's call, not the radiographer's - see APP_SETTINGS and
+    GET/POST /settings - so auto_ai isn't normally sent by the upload form
+    at all; it's only accepted here as an explicit override for testing.
+    When skipped, the study sits at "awaiting_review" until a doctor runs
+    it explicitly via POST /studies/{id}/infer (see run_inference below)."""
+    study_id = f"clinic-upload-{uuid.uuid4().hex[:8]}"
+    file_bytes = await file.read()
+
+    conn = get_connection()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO studies (
+                        orthanc_study_id, study_instance_uid, modality, study_description,
+                        series_count, instance_count, processing_status, anonymization_status,
+                        preview_status, upload_status, workflow_status
+                    )
+                    VALUES (%s, %s, 'CR', %s, 1, 1, 'done', 'skipped', 'done', 'done', 'received')
+                    """,
+                    (
+                        study_id,
+                        f"clinic-upload.{study_id}",
+                        label or f"Clinic workflow upload ({file.filename})",
+                    ),
+                )
+    finally:
+        conn.close()
+
+    object_path = f"samples/clinic-upload/{study_id}/{file.filename}"
+    try:
+        client = get_minio_client()
+        if not client.bucket_exists(MINIO_BUCKET):
+            client.make_bucket(MINIO_BUCKET)
+        client.put_object(
+            MINIO_BUCKET, object_path, io.BytesIO(file_bytes), length=len(file_bytes),
+            content_type=file.content_type or "image/png",
+        )
+    except S3Error as exc:
+        set_workflow_status(study_id, "failed", str(exc))
+        log_audit_event(request, "upload_study", study_id, "error")
+        raise HTTPException(status_code=502, detail="Could not store the uploaded image") from exc
+
+    conn = get_connection()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE studies SET preview_object_path = %s WHERE orthanc_study_id = %s",
+                    (object_path, study_id),
+                )
+    finally:
+        conn.close()
+    set_workflow_status(study_id, "stored")
+
+    if auto_ai is None:
+        run_ai_now = APP_SETTINGS["auto_ai_default"]
+    else:
+        run_ai_now = auto_ai.lower() in ("true", "1", "yes", "on")
+    ai_result = None
+    upload_ok = True
+    if run_ai_now:
+        set_workflow_status(study_id, "ai_processing")
+        try:
+            ai_response = requests.post(
+                f"http://{AI_INFERENCE_HOST}:{AI_INFERENCE_PORT}/infer",
+                json={"object_path": object_path}, timeout=30,
+            )
+            ai_response.raise_for_status()
+            ai_result = ai_response.json()
+            ai_result["result_id"] = store_ai_result(study_id, ai_result)
+            set_workflow_status(study_id, "ready_for_review")
+        except (requests.RequestException, KeyError) as exc:
+            set_workflow_status(study_id, "failed", str(exc))
+            upload_ok = False
+    else:
+        set_workflow_status(study_id, "awaiting_review")
+
+    log_audit_event(request, "upload_study", study_id, "success" if upload_ok else "error")
+    return {"study": fetch_study(study_id), "ai_result": ai_result}
 
 
 @app.get("/studies")
@@ -443,7 +592,11 @@ def get_preview_image(study_id: str, request: Request):
 def run_inference(study_id: str, request: Request):
     """Proxies to the ai-inference service (Step 21) using the study's
     own preview image as input, so a caller never needs direct MinIO
-    or ai-inference access - same idea as stream_minio_object above."""
+    or ai-inference access - same idea as stream_minio_object above. For
+    a clinic-workflow study (Step 28, workflow_status is set), this is
+    also what the Doctor Review view's "Run AI Evaluation" button calls
+    when a radiographer uploaded with auto_ai off - so a successful run
+    here advances workflow_status the same way an automatic one would."""
     try:
         study = fetch_study(study_id)
     except HTTPException:
@@ -455,6 +608,9 @@ def run_inference(study_id: str, request: Request):
         log_audit_event(request, "run_inference", study_id, "not_found")
         raise HTTPException(status_code=404, detail="No preview available for this study")
 
+    if study["workflow_status"]:
+        set_workflow_status(study_id, "ai_processing")
+
     try:
         ai_response = requests.post(
             f"http://{AI_INFERENCE_HOST}:{AI_INFERENCE_PORT}/infer",
@@ -462,15 +618,19 @@ def run_inference(study_id: str, request: Request):
             timeout=10,
         )
     except requests.RequestException as exc:
+        if study["workflow_status"]:
+            set_workflow_status(study_id, "failed", str(exc))
         log_audit_event(request, "run_inference", study_id, "error")
         raise HTTPException(status_code=502, detail="AI inference service unavailable") from exc
 
     if ai_response.status_code != 200:
-        log_audit_event(request, "run_inference", study_id, "error")
         try:
             detail = ai_response.json().get("detail", "AI inference service returned an error")
         except ValueError:
             detail = "AI inference service returned an error"
+        if study["workflow_status"]:
+            set_workflow_status(study_id, "failed", detail)
+        log_audit_event(request, "run_inference", study_id, "error")
         # Forwards ai-inference's own status code (e.g. 404 for a missing
         # object, 422 for a bad image) instead of flattening every
         # non-200 response into a generic 502 - only an actual connection
@@ -479,6 +639,8 @@ def run_inference(study_id: str, request: Request):
 
     result = ai_response.json()
     result["result_id"] = store_ai_result(study_id, result)
+    if study["workflow_status"]:
+        set_workflow_status(study_id, "ready_for_review")
     log_audit_event(request, "run_inference", study_id, "success")
     return result
 
@@ -674,11 +836,23 @@ def get_slice_preview_image(study_id: str, slice_index: int, request: Request):
 
 
 @app.get("/audit-events")
-def list_audit_events():
+def list_audit_events(study_id: str | None = None):
+    """study_id is optional - passing it doesn't add a new tracking
+    feature, it just filters the same audit trail every other endpoint
+    already writes to. The Doctor Review view (Step 28) uses this to show
+    "Reviewed" for a study only once a real view_study event exists for
+    it, instead of a separate reviewed flag with nothing behind it."""
     conn = get_connection()
     try:
         with conn.cursor() as cur:
-            cur.execute(f"SELECT {AUDIT_COLUMNS} FROM audit_events ORDER BY event_id DESC LIMIT 50")
+            if study_id:
+                cur.execute(
+                    f"SELECT {AUDIT_COLUMNS} FROM audit_events WHERE study_id = %s "
+                    "ORDER BY event_id DESC LIMIT 50",
+                    (study_id,),
+                )
+            else:
+                cur.execute(f"SELECT {AUDIT_COLUMNS} FROM audit_events ORDER BY event_id DESC LIMIT 50")
             rows = cur.fetchall()
     finally:
         conn.close()

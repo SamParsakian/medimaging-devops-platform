@@ -1,0 +1,401 @@
+/* Shared "MedSyn Lab" theme for the clinic workflow demo pages (Step 28) -
+   one stylesheet linked from index.html, upload.html, and review.html so
+   the three pages look like one product instead of three separately
+   themed ones. The background photo is a cropped version of an image Sam
+   supplied - see docs/local-stack.md for the source note. */
+
+:root {
+  --bg-base: #05070d;
+  --sidebar-bg: rgba(6, 10, 20, 0.95);
+  --card-bg: rgba(15, 20, 35, 0.72);
+  --card-border: rgba(255, 255, 255, 0.08);
+  --text-primary: #eef2f8;
+  --text-secondary: #93a0b8;
+  --accent: #2f7ffb;
+  --accent-hover: #1c65e0;
+  --status-received: #60a5fa;
+  --status-processing: #fb923c;
+  --status-ready: #34d399;
+  --status-reviewed: #a78bfa;
+  --status-failed: #f87171;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  margin: 0;
+  min-height: 100vh;
+  color: var(--text-primary);
+  background-color: var(--bg-base);
+  background-image: url("images/mri-scanner-bg.jpg");
+  background-repeat: no-repeat;
+  background-position: right top;
+  background-size: min(70vw, 1100px) auto;
+  background-attachment: fixed;
+}
+
+.app-layout {
+  display: flex;
+  min-height: 100vh;
+}
+
+.sidebar {
+  width: 240px;
+  flex-shrink: 0;
+  background: var(--sidebar-bg);
+  border-right: 1px solid var(--card-border);
+  padding: 1.5rem 1.25rem;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 2rem;
+}
+
+.brand-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  border: 2px solid var(--accent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.1rem;
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.brand-name {
+  font-size: 1.15rem;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.brand-subtitle {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+}
+
+.nav-links {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.nav-links a {
+  display: flex;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.6rem 0.75rem;
+  border-radius: 8px;
+  color: var(--text-secondary);
+  text-decoration: none;
+  font-size: 0.92rem;
+}
+
+.nav-links a .icon {
+  font-size: 1rem;
+  width: 1.2rem;
+  text-align: center;
+}
+
+.nav-links a:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-primary);
+}
+
+.nav-links a.active {
+  background: rgba(47, 127, 251, 0.15);
+  border: 1px solid rgba(47, 127, 251, 0.4);
+  color: #cfe0ff;
+}
+
+.main {
+  flex: 1;
+  padding: 1.75rem 2rem 3rem;
+  max-width: 1100px;
+}
+
+.page-subtitle {
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  margin: 0 0 1.5rem;
+}
+
+.card {
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 12px;
+  padding: 1.25rem 1.5rem;
+  margin-bottom: 1.5rem;
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+}
+
+.card h2 {
+  margin: 0 0 1rem;
+  font-size: 1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th, td {
+  text-align: left;
+  padding: 0.55rem 0.5rem;
+  border-bottom: 1px solid var(--card-border);
+  font-size: 0.88rem;
+}
+
+th {
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+.detail-table th {
+  width: 35%;
+  color: var(--text-secondary);
+  font-weight: 500;
+  vertical-align: top;
+}
+
+a {
+  color: var(--accent);
+}
+
+button, .btn {
+  font-family: inherit;
+  cursor: pointer;
+  border: none;
+  border-radius: 8px;
+  padding: 0.5rem 1rem;
+  font-size: 0.88rem;
+}
+
+.btn-primary {
+  background: var(--accent);
+  color: #fff;
+}
+
+.btn-primary:hover {
+  background: var(--accent-hover);
+}
+
+.btn-primary:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.btn-secondary {
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text-primary);
+  border: 1px solid var(--card-border);
+}
+
+.btn-secondary:hover {
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+}
+
+.status .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  display: inline-block;
+}
+
+.status.received .dot, .status.stored .dot, .status.awaiting_review .dot { background: var(--status-received); }
+.status.received, .status.stored, .status.awaiting_review { color: var(--status-received); }
+
+.status.ai_processing .dot { background: var(--status-processing); }
+.status.ai_processing { color: var(--status-processing); }
+
+.status.ready_for_review .dot { background: var(--status-ready); }
+.status.ready_for_review { color: var(--status-ready); }
+
+.status.reviewed .dot { background: var(--status-reviewed); }
+.status.reviewed { color: var(--status-reviewed); }
+
+.status.failed .dot { background: var(--status-failed); }
+.status.failed { color: var(--status-failed); }
+
+.thumb {
+  width: 44px;
+  height: 44px;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid var(--card-border);
+  background: #0b0f1a;
+  flex-shrink: 0;
+}
+
+.study-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.6rem 0.25rem;
+  border-bottom: 1px solid var(--card-border);
+  cursor: pointer;
+}
+
+.study-row:last-child {
+  border-bottom: none;
+}
+
+.study-row:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.study-row.selected {
+  background: rgba(47, 127, 251, 0.1);
+}
+
+.study-row-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.study-row-id {
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.study-row-desc {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.placeholder {
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+.error-text {
+  color: var(--status-failed);
+}
+
+.disclaimer {
+  margin-top: 0.75rem;
+  color: #d8b45a;
+  font-size: 0.8rem;
+  font-style: italic;
+}
+
+.preview-image {
+  max-width: 100%;
+  margin-top: 0.75rem;
+  border-radius: 8px;
+  border: 1px solid var(--card-border);
+}
+
+.heatmap-image {
+  max-width: 280px;
+  width: 100%;
+  border-radius: 8px;
+  border: 1px solid var(--card-border);
+  display: block;
+  margin-top: 0.5rem;
+}
+
+.dropzone {
+  border: 1px dashed rgba(255, 255, 255, 0.25);
+  border-radius: 10px;
+  padding: 2rem 1rem;
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.dropzone.dragover {
+  border-color: var(--accent);
+  background: rgba(47, 127, 251, 0.08);
+  color: var(--text-primary);
+}
+
+.dropzone .icon {
+  font-size: 1.6rem;
+  display: block;
+  margin-bottom: 0.5rem;
+}
+
+.dropzone button {
+  background: none;
+  border: none;
+  color: var(--accent);
+  padding: 0;
+  font-size: inherit;
+  text-decoration: underline;
+}
+
+.dropzone .filename {
+  margin-top: 0.5rem;
+  color: var(--text-primary);
+  font-size: 0.85rem;
+}
+
+label {
+  display: block;
+  font-size: 0.82rem;
+  color: var(--text-secondary);
+  margin: 0.9rem 0 0.35rem;
+}
+
+input[type="text"] {
+  width: 100%;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--card-border);
+  border-radius: 6px;
+  padding: 0.5rem 0.6rem;
+  color: var(--text-primary);
+  font-family: inherit;
+  font-size: 0.88rem;
+}
+
+input[type="text"]::placeholder {
+  color: #5c6577;
+}
+
+.checklist {
+  list-style: none;
+  padding: 0;
+  margin: 1rem 0 0;
+}
+
+.checklist li {
+  padding: 0.25rem 0;
+  font-size: 0.88rem;
+}
+
+.checklist .done {
+  color: var(--status-ready);
+}
+
+.checklist .failed {
+  color: var(--status-failed);
+}
