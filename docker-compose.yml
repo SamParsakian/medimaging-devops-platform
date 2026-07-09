@@ -78,6 +78,14 @@ services:
       API_SECRET_KEY: ${API_SECRET_KEY}
       AI_INFERENCE_HOST: ai-inference
       AI_INFERENCE_PORT: 8100
+      APP_NODE_HOST: ${APP_NODE_HOST:-localhost}
+      DATA_NODE_HOST: ${DATA_NODE_HOST:-localhost}
+      OPS_NODE_HOST: ${OPS_NODE_HOST:-localhost}
+      API_PORT: ${API_PORT:-8000}
+      MINIO_CONSOLE_PORT: ${MINIO_CONSOLE_PORT:-9001}
+      ORTHANC_HTTP_PORT: ${ORTHANC_HTTP_PORT:-8042}
+      PROMETHEUS_PORT: ${PROMETHEUS_PORT:-9090}
+      GRAFANA_PORT: ${GRAFANA_PORT:-3000}
     depends_on:
       postgres:
         condition: service_healthy

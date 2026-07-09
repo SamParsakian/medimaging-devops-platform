@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Ops Dashboard - MedSyn Lab</title>
+  <link rel="stylesheet" href="theme.css" />
+  <style>
+    .node-group {
+      margin-bottom: 1.25rem;
+    }
+
+    .node-group:last-child {
+      margin-bottom: 0;
+    }
+
+    .node-label {
+      font-size: 0.78rem;
+      color: var(--text-secondary);
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      margin: 0 0 0.5rem;
+    }
+
+    .service-row {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      padding: 0.6rem 0.25rem;
+      border-bottom: 1px solid var(--card-border);
+    }
+
+    .service-row:last-child {
+      border-bottom: none;
+    }
+
+    .service-icon {
+      width: 36px;
+      height: 36px;
+      border-radius: 8px;
+      background: rgba(255, 255, 255, 0.06);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1.1rem;
+      flex-shrink: 0;
+    }
+
+    .service-main {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .service-name {
+      font-size: 0.92rem;
+      font-weight: 600;
+    }
+
+    .service-desc {
+      font-size: 0.8rem;
+      color: var(--text-secondary);
+    }
+  </style>
+</head>
+<body>
+  <div class="app-layout">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-icon">&#9737;</div>
+        <div>
+          <div class="brand-name">MedSyn Lab</div>
+          <div class="brand-subtitle">Radiology Imaging Center</div>
+        </div>
+      </div>
+      <ul class="nav-links">
+        <li><a href="/dashboard/"><span class="icon">&#8962;</span> Home</a></li>
+        <li><a href="/dashboard/studies.html"><span class="icon">&#127968;</span> Studies</a></li>
+        <li><a href="/dashboard/upload.html"><span class="icon">&#9729;</span> Upload</a></li>
+        <li><a href="/dashboard/review.html"><span class="icon">&#129658;</span> Doctor Review</a></li>
+        <li><a href="/dashboard/ops.html" class="active"><span class="icon">&#9881;</span> Ops Dashboard</a></li>
+      </ul>
+    </aside>
+
+    <main class="main">
+      <p class="page-subtitle">Demo-grade viewer - no real patient data, no clinical use.</p>
+
+      <section class="card">
+        <h2><span class="icon">&#9881;</span> Ops Dashboard</h2>
+        <p class="page-subtitle" style="margin-top: 0;">Direct links to every operational tool in this platform - no SSH needed. Each service still uses its own login; this page only points at it.</p>
+        <div id="ops-links-list">
+          <p class="placeholder">Loading service links...</p>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const apiKey = new URLSearchParams(window.location.search).get("api_key") || "";
+
+    if (apiKey) {
+      for (const link of document.querySelectorAll(".nav-links a")) {
+        link.href += (link.href.includes("?") ? "&" : "?") + `api_key=${encodeURIComponent(apiKey)}`;
+      }
+    }
+
+    function apiFetch(url) {
+      return fetch(url, { headers: { "X-API-Key": apiKey } });
+    }
+
+    function statusDot(reachable) {
+      const cls = reachable ? "ready_for_review" : "failed";
+      const label = reachable ? "reachable" : "unreachable";
+      return `<span class="status ${cls}"><span class="dot"></span>${label}</span>`;
+    }
+
+    const NODE_LABELS = {
+      app: "App Node",
+      data: "Data / Imaging Node",
+      ops: "Ops / Monitoring Node",
+    };
+
+    async function loadOpsLinks() {
+      const list = document.getElementById("ops-links-list");
+      try {
+        const response = await apiFetch("/ops-links");
+        const links = await response.json();
+
+        const byNode = {};
+        for (const link of links) {
+          (byNode[link.node] ??= []).push(link);
+        }
+
+        list.innerHTML = Object.keys(NODE_LABELS)
+          .filter((node) => byNode[node])
+          .map(
+            (node) => `
+              <div class="node-group">
+                <p class="node-label">${NODE_LABELS[node]}</p>
+                ${byNode[node]
+                  .map(
+                    (link) => `
+                      <div class="service-row">
+                        <div class="service-icon">&#128279;</div>
+                        <div class="service-main">
+                          <div class="service-name">${link.name}</div>
+                          <div class="service-desc">${link.description}</div>
+                        </div>
+                        ${statusDot(link.reachable)}
+                        <a class="btn btn-secondary" href="${link.url}" target="_blank" rel="noopener">Open</a>
+                      </div>
+                    `
+                  )
+                  .join("")}
+              </div>
+            `
+          )
+          .join("");
+      } catch (err) {
+        list.innerHTML = `<p class="error-text">Could not load service links.</p>`;
+      }
+    }
+
+    loadOpsLinks();
+  </script>
+</body>
+</html>

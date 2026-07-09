@@ -162,6 +162,10 @@ The Doctor Review view lists every study with a non-null `workflow_status`, newe
 
 `scripts/run-demo-workflow.sh` uploads 3 public sample X-rays (already used in Step 26's evaluation set, see `docs/sample-data.md`) through `POST /studies/upload` in one run, so the Doctor Review view has real studies to show without uploading through the browser by hand first.
 
+## Ops Dashboard
+
+`ops.html` links to every operational tool in this platform - Prometheus, Grafana, MinIO Console, Orthanc, and the API's own Swagger docs - so an ops person never needs SSH access just to check on things. Links are grouped by node (app / data-imaging / ops-monitoring), matching how Step 29 plans to actually deploy this stack across three separate machines. Each link's address comes from `APP_NODE_HOST`/`DATA_NODE_HOST`/`OPS_NODE_HOST` in `.env` (all default to `localhost`), and `GET /ops-links` checks each service's reachability from the API's own backend before the page shows a status dot - using Docker Compose's internal service names for that check, since `localhost` inside the API's own container never reaches the host's published ports.
+
 ## AI inference
 
 `services/ai-inference/` is a separate FastAPI service, its own container, that takes a preview image already stored in MinIO and returns a JSON result. It runs on CPU only - no GPU, no model training, and no external AI service is called.

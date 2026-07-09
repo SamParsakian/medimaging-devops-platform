@@ -804,4 +804,24 @@ Turning the policy back on returns to the original automatic path - a new upload
 
 ![Doctor Review view with the policy back on: a newly uploaded study already "ready for review" with a full AI result](images/step-28-doctor-auto-result.png)
 
-Nothing about a single, already-existing API endpoint changed behavior in this step. Every page the platform already had keeps working exactly as before; what's new is a way to get an image in from a browser, two pages built around that, a shared look across all four pages, a real home page tying them together, and a doctor-controlled switch for whether the AI step runs on its own or waits to be asked.
+### A fifth page for ops
+
+A fifth page, `ops.html` (Ops Dashboard), gives an ops or DevOps person direct links to every operational tool in this platform - Prometheus, Grafana, MinIO Console, Orthanc, and the API's own Swagger docs - grouped by which of three nodes each one belongs to (app, data/imaging, ops/monitoring), the same three-way split Step 29's real deployment will use:
+
+![Ops Dashboard page: five services grouped under App Node, Data / Imaging Node, and Ops / Monitoring Node headings, each row showing a name, description, a green "reachable" status, and an Open button](images/step-28-ops-dashboard.png)
+
+Each link's address comes from three env vars - `APP_NODE_HOST`, `DATA_NODE_HOST`, `OPS_NODE_HOST` - all defaulting to `localhost` today. Moving this to three real VPS nodes only means changing those three values, not this page or its code.
+
+The status dot next to each link is checked from the API's own backend, not the browser, using a separate internal address for each service (Docker Compose's own service names, e.g. `http://minio:9001`) rather than the public one the "Open" button uses:
+
+```python
+{
+    "name": "MinIO Console", "node": "data", "description": "Object storage browser",
+    "url": f"http://{DATA_NODE_HOST}:{MINIO_CONSOLE_PORT}",
+    "check_url": "http://minio:9001",
+}
+```
+
+The two addresses have to be different locally: `localhost` inside the API's own container refers to the container itself, not the host machine, so a check against the public address always failed even though every service was actually running fine. Once these move to separate real VPS nodes in Step 29, both addresses converge to the same one.
+
+Nothing about a single, already-existing API endpoint changed behavior in this step. Every page the platform already had keeps working exactly as before; what's new is a way to get an image in from a browser, three pages built around that (upload, review, ops), a shared look across all five pages, a real home page tying them together, and a doctor-controlled switch for whether the AI step runs on its own or waits to be asked.
