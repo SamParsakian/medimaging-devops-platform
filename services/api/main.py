@@ -71,6 +71,19 @@ MINIO_BUCKET = os.environ.get("MINIO_BUCKET", "medimaging")
 AI_INFERENCE_HOST = os.environ.get("AI_INFERENCE_HOST", "localhost")
 AI_INFERENCE_PORT = os.environ.get("AI_INFERENCE_PORT", "8100")
 
+# Ops Dashboard (Step 28 addition): where each group of services actually
+# runs. All three default to "localhost" since everything runs on one
+# machine today - a real multi-node deployment (Step 29) only needs these
+# three values changed in .env, no code changes here.
+APP_NODE_HOST = os.environ.get("APP_NODE_HOST", "localhost")
+DATA_NODE_HOST = os.environ.get("DATA_NODE_HOST", "localhost")
+OPS_NODE_HOST = os.environ.get("OPS_NODE_HOST", "localhost")
+API_PORT = os.environ.get("API_PORT", "8000")
+MINIO_CONSOLE_PORT = os.environ.get("MINIO_CONSOLE_PORT", "9001")
+ORTHANC_HTTP_PORT = os.environ.get("ORTHANC_HTTP_PORT", "8042")
+PROMETHEUS_PORT = os.environ.get("PROMETHEUS_PORT", "9090")
+GRAFANA_PORT = os.environ.get("GRAFANA_PORT", "3000")
+
 # This platform's safety rule is "no real patient data, ever" - every
 # study it ever holds is demo/anonymized data by design, so PatientID
 # is always safe to expose here.
@@ -376,6 +389,66 @@ def update_settings(request: Request, auto_ai_default: bool = Body(..., embed=Tr
     APP_SETTINGS["auto_ai_default"] = auto_ai_default
     log_audit_event(request, "update_settings", None, "success")
     return dict(APP_SETTINGS)
+
+
+def build_ops_links():
+    """The Ops Dashboard's link list (Step 28 addition, prepared ahead of
+    Step 29's real multi-node deployment). Each entry's "url" (what the
+    browser opens) comes from APP_NODE_HOST/DATA_NODE_HOST/OPS_NODE_HOST -
+    grouped by which node each service is planned to run on, so pointing
+    this at three real VPS nodes later only means changing those three
+    env vars, not this list. "check_url" is separate on purpose: it uses
+    Docker Compose's own internal service names (minio, orthanc, etc.),
+    since "localhost" inside the api container means the container
+    itself, not the host - the same host machine's own published ports
+    aren't reachable that way from inside another container. Once Step 29
+    moves these onto real separate VPS nodes, check_url and url converge
+    to the same address anyway."""
+    return [
+        {
+            "name": "API Docs", "node": "app", "description": "Swagger UI for this API",
+            "url": f"http://{APP_NODE_HOST}:{API_PORT}/docs",
+            "check_url": "http://localhost:8000/docs",
+        },
+        {
+            "name": "MinIO Console", "node": "data", "description": "Object storage browser",
+            "url": f"http://{DATA_NODE_HOST}:{MINIO_CONSOLE_PORT}",
+            "check_url": "http://minio:9001",
+        },
+        {
+            "name": "Orthanc Explorer", "node": "data", "description": "DICOM server",
+            "url": f"http://{DATA_NODE_HOST}:{ORTHANC_HTTP_PORT}",
+            "check_url": "http://orthanc:8042",
+        },
+        {
+            "name": "Prometheus", "node": "ops", "description": "Metrics and alerts",
+            "url": f"http://{OPS_NODE_HOST}:{PROMETHEUS_PORT}",
+            "check_url": "http://prometheus:9090",
+        },
+        {
+            "name": "Grafana", "node": "ops", "description": "Monitoring dashboards",
+            "url": f"http://{OPS_NODE_HOST}:{GRAFANA_PORT}",
+            "check_url": "http://grafana:3000",
+        },
+    ]
+
+
+@app.get("/ops-links")
+def get_ops_links():
+    """Reachability is checked server-side against check_url (not url,
+    and not by the browser) so a private/internal-only node address still
+    reports correctly even though the browser viewing this page might not
+    be able to reach it directly - the check only proves the API's own
+    network path to each service."""
+    links = build_ops_links()
+    for link in links:
+        check_url = link.pop("check_url")
+        try:
+            response = requests.get(check_url, timeout=1.5)
+            link["reachable"] = response.status_code < 500
+        except requests.RequestException:
+            link["reachable"] = False
+    return links
 
 
 @app.get("/ai-config")
