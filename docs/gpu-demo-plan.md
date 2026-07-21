@@ -48,13 +48,7 @@ That's correct and expected - there's no NVIDIA GPU on this machine at all, let 
 
 ## Docker Compose deployment flow (GPU)
 
-`docker-compose.gpu.example.yml` (added in this step) is a second optional override, layered on top of the base file and the production override:
-
-```bash
-docker compose -f docker-compose.yml -f docker-compose.prod.example.yml -f docker-compose.gpu.example.yml --env-file .env.production up -d --build
-```
-
-It only adds a device reservation to the `ai-inference` service, requesting one NVIDIA GPU through Compose's own `deploy.resources.reservations.devices` syntax - see the file itself for the exact block. It does not switch the Dockerfile to CUDA wheels or add any `.to("cuda")` code, since that's real, untested code (see above) that shouldn't be written until there's a GPU to actually test it against. Using this file today, with no GPU present, would simply fail to start `ai-inference` - which is expected and correct; it's meant to be added only once a GPU server exists.
+The original plan here was a `docker-compose.gpu.example.yml` override, adding a device reservation to the `ai-inference` service (one NVIDIA GPU, via Compose's own `deploy.resources.reservations.devices` syntax) on top of a single production server. That single-server plan was superseded by the three-node deployment actually built (see `docs/deployment.md`'s "Three-node deployment"), where `ai-inference` runs on the app node's own `docker-compose.app-node.example.yml` instead - a GPU override, if this is ever pursued, would need to be written against that file instead. It still would not switch the Dockerfile to CUDA wheels or add any `.to("cuda")` code, since that's real, untested code (see above) that shouldn't be written until there's a GPU to actually test it against - it's meant to be added only once a GPU server exists.
 
 ## Expected VPS/GPU resource table
 

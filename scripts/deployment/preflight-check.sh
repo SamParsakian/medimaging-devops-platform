@@ -66,7 +66,7 @@ fi
 echo
 
 echo "--- Example compose files ---"
-for f in docker-compose.prod.example.yml docker-compose.gpu.example.yml; do
+for f in docker-compose.app-node.example.yml docker-compose.data-node.example.yml docker-compose.ops-node.example.yml; do
   if [ -f "$f" ]; then
     if docker compose -f docker-compose.yml -f "$f" config >/dev/null 2>&1; then
       echo "$PASS $f parses correctly alongside docker-compose.yml."

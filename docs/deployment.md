@@ -1,16 +1,12 @@
 # Deployment
 
-This document plans out what moving this stack from a local Mac to a rented server would actually involve. It's preparation only - nothing here has been deployed, no server has been rented, and no domain or certificate exists yet. The goal is to have every real decision (ports, secrets, backups, HTTPS) already thought through and written down, so the day a VPS actually gets rented, it's a checklist to follow rather than a design exercise to do under pressure. GPU-specific concerns (Mac ARM64 vs cloud GPU, CPU vs GPU inference, NVIDIA Container Toolkit) are split out into `docs/gpu-demo-plan.md`.
+This document started as a plan for moving this stack from a local Mac to a rented server, written before any server existed - the goal was to have every real decision (ports, secrets, backups, HTTPS) already thought through, so the day a VPS actually got rented it would be a checklist to follow rather than a design exercise to do under pressure. Most of it below is still that original plan; "Three-node deployment" documents what was actually rented and deployed for real, which ended up being three servers instead of one. No domain or certificate exists yet, on any node. GPU-specific concerns (Mac ARM64 vs cloud GPU, CPU vs GPU inference, NVIDIA Container Toolkit) are split out into `docs/gpu-demo-plan.md`.
 
 ## Docker Compose deployment flow
 
-The stack is already fully defined in `docker-compose.yml` - the plan is not to rewrite it for production, but to layer a second file on top of it using Compose's multi-file support:
+The original plan here was a single production server, running `docker-compose.yml` with a second override file (`docker-compose.prod.example.yml`) layered on top of it via Compose's multi-file support - overriding only what actually needs to change for a server instead of a laptop, not redefining any service from scratch. Writing that override file surfaced a real, worth-knowing fact about Compose: it merges the `ports` list across files by appending to it, not replacing it, so an override file can't unpublish a port the base file already defines (confirmed directly with `docker compose config`, not assumed). Closing ports to the public internet is a firewall job, not a Compose job - see "Firewall ports" below.
 
-```bash
-docker compose -f docker-compose.yml -f docker-compose.prod.example.yml --env-file .env.production up -d --build
-```
-
-`docker-compose.prod.example.yml` (added in this step, see below) only overrides what actually needs to change for a server instead of a laptop - it doesn't redefine any service from scratch, and the base `docker-compose.yml` stays the single source of truth for what each service is and how they connect to each other. It deliberately does not try to change which ports get published - Compose merges the `ports` list across files by appending to it, not replacing it, so an override file can't unpublish a port the base file already defines (confirmed directly with `docker compose config` while writing this - see the file's own comments). Closing ports to the public internet is a firewall job, not a Compose job - see "Firewall ports" below.
+That single-server plan was superseded before ever being deployed - see "Three-node deployment" below for what was actually built and run.
 
 ## Persistent volumes
 
