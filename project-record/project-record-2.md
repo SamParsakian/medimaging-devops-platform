@@ -824,4 +824,51 @@ The status dot next to each link is checked from the API's own backend, not the 
 
 The two addresses have to be different locally: `localhost` inside the API's own container refers to the container itself, not the host machine, so a check against the public address always failed even though every service was actually running fine. Once these move to separate real VPS nodes in Step 29, both addresses converge to the same one.
 
+## Step 29 - DICOM Pipeline Demo and Doctor-Controlled AI Review
+
+The home page now tells the story of a chest X-ray's whole journey, one step at a time - from the moment it reaches Orthanc to the moment a doctor reads the AI's opinion of it. Ten steps make up that story, and six of them are wired to real, independently runnable scripts already living in this project:
+
+```python
+PIPELINE_STAGE_FUNCTIONS = {
+    "extracted": pipeline_stage_extracted,               # services/metadata-extractor/extract.py
+    "anonymized": pipeline_stage_anonymized,              # services/anonymizer/anonymize.py
+    "preview": pipeline_stage_preview,                    # services/preview-generator/generate_preview.py
+    "dicom_uploaded": pipeline_stage_dicom_uploaded,      # services/minio-uploader/upload.py
+    "preview_uploaded": pipeline_stage_preview_uploaded,  # services/preview-generator/upload_preview.py
+    "inference": pipeline_stage_inference,                # services/ai-inference/main.py
+}
+```
+
+Deciding where one step ends and the next begins meant reading those scripts rather than guessing - `extract.py` finds a study and saves its metadata in the same breath, so that's one step, while `upload.py` and `upload_preview.py` turned out to be two separate scripts, each uploading one file, so storage became two steps instead of one. A pop-up on each step names its script, so a student can go open the real file.
+
+Uploading a real DICOM file through Orthanc's own page and walking it through confirms the story is true, not staged - every step reports the real Orthanc ID, the real filenames, the real MinIO paths, and those objects are sitting in MinIO by the time it finishes.
+
+![Orthanc's own upload page with a real sample chest X-ray selected](images/step-29-orthanc-upload-dialog.png)
+
+![The pipeline after the real steps finish, each showing the identifiers and paths that run produced](images/step-29-pipeline-real-stages-done.png)
+
+Then comes the part of the story about who's allowed to run the AI. Step 28 already let a doctor turn automatic AI review off, so a study waits for a human instead of getting read on its own. This step made sure that promise holds everywhere, not just where it was first built. The pipeline's own AI step got the same check the Doctor Review page already had:
+
+```python
+if not APP_SETTINGS["auto_ai_default"]:
+    set_workflow_status(orthanc_study_id, "awaiting_review")
+    return {"awaiting_doctor_review": True}
+```
+
+![The AI step reporting that it's waiting on a doctor, with automatic review off](images/step-29-pipeline-awaiting-doctor.png)
+
+Doctor Review itself had a smaller problem hiding in it: its "Run AI Evaluation" button only appeared when a study had no result on file yet, and a study can end up carrying an old result while it's still genuinely waiting on a doctor. So the button was changed to follow the study's own status instead of its history - if it's `awaiting_review`, the button is there, no matter what else is on record for it.
+
+![Doctor Review with automatic review off: no result shown, Run AI Evaluation offered](images/step-29-doctor-review-awaiting.png)
+
+![The same study after the doctor runs it: finding, confidence, heatmap, findings table](images/step-29-doctor-review-ready.png)
+
+Turn automatic review back on, and none of this shows up - AI runs the moment a study reaches that step, same as before.
+
+Prometheus and Grafana back the story up from the outside: both services healthy, real traffic behind every result shown above.
+
+![Prometheus showing the api and ai-inference targets up](images/step-29-pipeline-prometheus-targets.png)
+
+![Grafana's AI inference dashboard, real request counts and inference time](images/step-29-pipeline-grafana-ai-inference.png)
+
 Nothing about a single, already-existing API endpoint changed behavior in this step. Every page the platform already had keeps working exactly as before; what's new is a way to get an image in from a browser, three pages built around that (upload, review, ops), a shared look across all five pages, a real home page tying them together, and a doctor-controlled switch for whether the AI step runs on its own or waits to be asked.
