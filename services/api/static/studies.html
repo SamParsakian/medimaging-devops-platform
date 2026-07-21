@@ -193,23 +193,12 @@
     </main>
   </div>
 
+  <script src="auth.js"></script>
   <script>
     const studiesBody = document.getElementById("studies-body");
     const detailSection = document.getElementById("study-detail");
     const auditBody = document.getElementById("audit-events-body");
-
-    // Read once from the page's own URL, e.g. /dashboard/?api_key=... - the
-    // same key is then sent as a header on every API call this page makes.
-    const apiKey = new URLSearchParams(window.location.search).get("api_key") || "";
-
-    // Sidebar links are plain hrefs in the HTML - carry the key forward so
-    // clicking between pages doesn't land on one that then fails every
-    // fetch it makes (every dashboard page needs its own ?api_key=...).
-    if (apiKey) {
-      for (const link of document.querySelectorAll(".nav-links a")) {
-        link.href += (link.href.includes("?") ? "&" : "?") + `api_key=${encodeURIComponent(apiKey)}`;
-      }
-    }
+    const apiKey = window.API_KEY || "";
 
     function apiFetch(url) {
       return fetch(url, { headers: { "X-API-Key": apiKey } });
@@ -217,11 +206,6 @@
 
     function apiPost(url) {
       return fetch(url, { method: "POST", headers: { "X-API-Key": apiKey } });
-    }
-
-    function withApiKey(url) {
-      const separator = url.includes("?") ? "&" : "?";
-      return apiKey ? `${url}${separator}api_key=${encodeURIComponent(apiKey)}` : url;
     }
 
     function previewBadge(study) {
@@ -296,7 +280,7 @@
             ? `${(sample.top_confidence * 100).toFixed(1)}%`
             : "";
           const heatmapCell = sample.ai_result_id
-            ? `<img class="heatmap-thumb" src="${withApiKey(`/studies/${sample.orthanc_study_id}/ai-results/${sample.ai_result_id}/heatmap-image`)}" alt="Heatmap for ${sample.sample_id}" />`
+            ? `<img class="heatmap-thumb" src="/studies/${sample.orthanc_study_id}/ai-results/${sample.ai_result_id}/heatmap-image" alt="Heatmap for ${sample.sample_id}" />`
             : "n/a";
           row.innerHTML = `
             <td>${sample.sample_id}</td>
@@ -363,7 +347,7 @@
     let currentSliceIndex = 0;
 
     function sliceImageUrl(studyId, sliceIndex) {
-      return withApiKey(`/studies/${studyId}/slices/${sliceIndex}/preview-image`);
+      return `/studies/${studyId}/slices/${sliceIndex}/preview-image`;
     }
 
     function updateSliceView(studyId) {
@@ -423,7 +407,7 @@
       const heatmapBlock = data.heatmap_object && data.result_id
         ? `
           <p class="heatmap-label">Heatmap for top finding (${data.prediction_label}):</p>
-          <img class="heatmap-image" src="${withApiKey(`/studies/${studyId}/ai-results/${data.result_id}/heatmap-image`)}" alt="AI heatmap for ${data.prediction_label}" />
+          <img class="heatmap-image" src="/studies/${studyId}/ai-results/${data.result_id}/heatmap-image" alt="AI heatmap for ${data.prediction_label}" />
         `
         : "";
 
@@ -468,9 +452,9 @@
       ]);
 
       // A study with registered slices gets Previous/Next/slider
-      // navigation instead of the single static preview image. <img>
-      // can't send a custom header, so both kinds of preview image are
-      // authenticated via the api_key query parameter instead of X-API-Key.
+      // navigation instead of the single static preview image. Both kinds
+      // of preview image authenticate via the api_key cookie auth.js sets -
+      // the browser attaches it to an <img> request the same as any other.
       let previewBlock;
       if (slices.length > 0) {
         previewBlock = `
@@ -485,7 +469,7 @@
           </div>
         `;
       } else if (previewInfo.available) {
-        previewBlock = `<img class="preview-image" src="${withApiKey(`/studies/${studyId}/preview-image`)}" alt="Study preview" />`;
+        previewBlock = `<img class="preview-image" src="/studies/${studyId}/preview-image" alt="Study preview" />`;
       } else {
         previewBlock = `<p class="placeholder">No preview available for this study.</p>`;
       }

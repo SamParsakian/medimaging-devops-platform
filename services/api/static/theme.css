@@ -366,7 +366,7 @@ label {
   margin: 0.9rem 0 0.35rem;
 }
 
-input[type="text"] {
+input[type="text"], input[type="password"] {
   width: 100%;
   background: rgba(255, 255, 255, 0.05);
   border: 1px solid var(--card-border);
@@ -377,8 +377,30 @@ input[type="text"] {
   font-size: 0.88rem;
 }
 
-input[type="text"]::placeholder {
+input[type="text"]::placeholder, input[type="password"]::placeholder {
   color: #5c6577;
+}
+
+/* Shown by auth.js on first visit, when no api_key cookie is set yet -
+   asks once for the demo API key instead of it ever appearing in the
+   address bar. */
+.api-key-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(5, 7, 13, 0.85);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.api-key-box {
+  width: 320px;
+  max-width: 90vw;
+}
+
+.api-key-box h2 {
+  margin: 0 0 0.5rem;
 }
 
 .checklist {

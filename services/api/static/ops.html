@@ -93,14 +93,9 @@
     </main>
   </div>
 
+  <script src="auth.js"></script>
   <script>
-    const apiKey = new URLSearchParams(window.location.search).get("api_key") || "";
-
-    if (apiKey) {
-      for (const link of document.querySelectorAll(".nav-links a")) {
-        link.href += (link.href.includes("?") ? "&" : "?") + `api_key=${encodeURIComponent(apiKey)}`;
-      }
-    }
+    const apiKey = window.API_KEY || "";
 
     function apiFetch(url) {
       return fetch(url, { headers: { "X-API-Key": apiKey } });

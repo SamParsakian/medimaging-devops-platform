@@ -86,6 +86,11 @@ services:
       ORTHANC_HTTP_PORT: ${ORTHANC_HTTP_PORT:-8042}
       PROMETHEUS_PORT: ${PROMETHEUS_PORT:-9090}
       GRAFANA_PORT: ${GRAFANA_PORT:-3000}
+      ORTHANC_HOST: ${ORTHANC_HOST:-orthanc}
+      PROMETHEUS_HOST: ${PROMETHEUS_HOST:-prometheus}
+      GRAFANA_HOST: ${GRAFANA_HOST:-grafana}
+      ORTHANC_USER: ${ORTHANC_USER:-orthanc}
+      ORTHANC_PASSWORD: ${ORTHANC_PASSWORD:-changeme}
     depends_on:
       postgres:
         condition: service_healthy
