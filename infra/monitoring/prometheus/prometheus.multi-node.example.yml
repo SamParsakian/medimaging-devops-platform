@@ -1,0 +1,26 @@
+# Prometheus scrape config for the ops node in a real three-node deployment
+# (see docs/deployment.md's "Three-node deployment" section). Prometheus
+# itself has no environment-variable substitution, so this file is a
+# template: copy it to prometheus.multi-node.yml (git-ignored) on the ops
+# node itself and replace APP_NODE_PRIVATE_HOST with the app node's actual
+# private network address before mounting it in place of prometheus.yml.
+global:
+  scrape_interval: 15s
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+scrape_configs:
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+
+  - job_name: api
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["APP_NODE_PRIVATE_HOST:8000"]
+
+  - job_name: ai-inference
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["APP_NODE_PRIVATE_HOST:8100"]

@@ -69,3 +69,48 @@ Not implemented yet, on purpose - this needs a real domain name first, which doe
 Everything in `docs/security.md` about this being a local, single-operator, no-real-auth demo stack still applies once it's reachable on the internet instead of `localhost` - the security posture doesn't change just because the URL does. If this were ever deployed as a public demo, the same API key model described there would still be the only thing standing between the internet and the API, which is a materially bigger risk on a public IP than on a home network. This is a real limitation to accept consciously before deploying, not a gap to paper over.
 
 This platform holds no real patient data and makes no clinical diagnosis claims, on a rented VPS exactly the same as it doesn't today - deploying it changes where it runs, not what it's allowed to hold or claim.
+
+## Three-node deployment
+
+This plan was carried out for real: three small VPS nodes (2 vCPU, 3.7 GB RAM each), one per group of services - app (API, dashboard, ai-inference), data (Postgres, MinIO, Orthanc), and ops (Prometheus, Grafana) - connected over a private network in addition to each having its own public IP. The single `docker-compose.yml` doesn't work unmodified for this, since Compose's `depends_on`/health-check wiring only understands services inside its own project - three separate compose files exist instead, one per node, each defined only in terms of the services that node actually runs:
+
+```text
+docker-compose.data-node.example.yml
+docker-compose.app-node.example.yml
+docker-compose.ops-node.example.yml
+.env.data-node.example
+.env.app-node.example
+.env.ops-node.example
+```
+
+Copied to their real (git-ignored) filenames on each server, filled in with real generated secrets, the same pattern `.env.production.example` already used. Cross-node service traffic - the app node's API reaching Postgres/MinIO/Orthanc on the data node, Prometheus on the ops node scraping the API/ai-inference on the app node - goes over each node's private network address instead of a Docker Compose service name, since service-name DNS only resolves inside one node's own Compose project:
+
+```text
+POSTGRES_HOST=<data node private IP>
+MINIO_HOST=<data node private IP>
+ORTHANC_HOST=<data node private IP>
+PROMETHEUS_HOST=<ops node private IP>
+GRAFANA_HOST=<ops node private IP>
+```
+
+The Ops Dashboard's own reachability check (`build_ops_links()` in `services/api/main.py`) needed the same treatment - it used to hardcode Docker's internal service names (`minio`, `orthanc`, `prometheus`, `grafana`) as the address it checks from the API's own backend, which only ever worked because every service used to live in one Compose project. Those are now `ORTHANC_HOST`/`PROMETHEUS_HOST`/`GRAFANA_HOST` environment variables instead (mirroring the `MINIO_HOST` variable the API already had), defaulting to the same service names for local single-machine use and set to each node's private IP for the real deployment - the check still travels over the private network rather than back out over the public internet.
+
+Prometheus itself has no environment-variable substitution in its config file, so its scrape targets can't be set from `.env` the way everything else here is - `infra/monitoring/prometheus/prometheus.multi-node.example.yml` is a template with a placeholder (`APP_NODE_PRIVATE_HOST`) instead, copied to a real `prometheus.multi-node.yml` (git-ignored, since it contains a real private IP) on the ops node with the placeholder replaced, and mounted in place of the single-machine `prometheus.yml`.
+
+### A real gotcha: ufw doesn't actually restrict Docker's published ports
+
+The plan above (only the API's port public, everything else private-network-only) turned out not to be true by default. `ufw` showed a clean "deny incoming, only these ports allowed" status on every node, but every port a container publishes with `ports:` was still reachable from the public internet regardless - confirmed directly, not assumed, by testing Postgres's port from outside right after `ufw` reported it blocked. Docker manages its own `iptables` rules for published ports and inserts them ahead of `ufw`'s own chain, so `ufw`'s rules never actually get evaluated for container traffic at all.
+
+The real fix uses Docker's own `DOCKER-USER` iptables chain, which Docker guarantees is evaluated before its own port-publishing rules:
+
+```bash
+iptables -A DOCKER-USER -i <private-interface> -j RETURN
+iptables -A DOCKER-USER -i <public-interface> -p tcp --dport <allowed-port> -j RETURN
+iptables -A DOCKER-USER -i <public-interface> -j DROP
+```
+
+Traffic arriving on the private network interface is always allowed through (`RETURN` continues on to Docker's normal handling); traffic arriving on the public interface only gets through for the specific ports meant to be public; anything else arriving on the public interface gets dropped before it ever reaches a container. Rule order matters - `iptables -I` (insert) without a position number keeps inserting at the top, which silently reverses the intended order if run more than once; `iptables -A` (append) after an `iptables -F` flush keeps them in the order written. This has to be set up separately from `ufw`, on every node that publishes a port that shouldn't be public, and doesn't persist across a reboot without extra configuration (`iptables-persistent` or similar) - worth doing for anything longer-lived than a demo that gets torn down.
+
+### Real resource behavior on a small node
+
+2 vCPU / 3.7 GB RAM with no swap was tight enough that a swap file was added before deploying anything (`scripts/deployment/setup-swap.sh`), sized to each node's actual job - 4 GB on the app node (API, dashboard, and ai-inference's torch/torchxrayvision model all share this node), 2 GB on the data and ops nodes. Building the ai-inference image (downloading torch and the model weights) took noticeably longer than on a development machine, as expected for 2 vCPUs - but once running, a real inference call against the deployed model still completed in a little over a second, which is fast enough that the demo doesn't feel slow even though it's running on CPU-only cloud hardware instead of a laptop.

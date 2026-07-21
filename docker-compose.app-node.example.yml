@@ -1,0 +1,77 @@
+# App node compose file for the real three-node deployment (Step 29, see
+# docs/deployment.md's "Three-node deployment" section). Runs the API
+# (which also serves the dashboard) and ai-inference only. api still
+# depends on ai-inference since both run on this same node, but its
+# dependency on postgres/minio is dropped here - those containers run on
+# the data node instead, reached over the private network by IP address
+# (POSTGRES_HOST/MINIO_HOST/ORTHANC_HOST in .env.app-node, see
+# .env.app-node.example) rather than by Compose service name.
+#
+# Copy this file to docker-compose.app-node.yml (git-ignored) on the app
+# node, alongside a real .env.app-node (copied from .env.app-node.example,
+# see docs/deployment.md), then run:
+#
+#   docker compose -f docker-compose.app-node.yml --env-file .env.app-node up -d --build
+
+services:
+  api:
+    build:
+      context: ./services/api
+    container_name: api
+    restart: unless-stopped
+    ports:
+      - "${API_PORT:-8000}:8000"
+    environment:
+      POSTGRES_HOST: ${POSTGRES_HOST}
+      POSTGRES_PORT: ${POSTGRES_PORT:-5432}
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      MINIO_HOST: ${MINIO_HOST}
+      MINIO_PORT: 9000
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET: ${MINIO_BUCKET}
+      API_SECRET_KEY: ${API_SECRET_KEY}
+      AI_INFERENCE_HOST: ai-inference
+      AI_INFERENCE_PORT: 8100
+      APP_NODE_HOST: ${APP_NODE_HOST}
+      DATA_NODE_HOST: ${DATA_NODE_HOST}
+      OPS_NODE_HOST: ${OPS_NODE_HOST}
+      API_PORT: ${API_PORT:-8000}
+      MINIO_CONSOLE_PORT: ${MINIO_CONSOLE_PORT:-9001}
+      ORTHANC_HTTP_PORT: ${ORTHANC_HTTP_PORT:-8042}
+      PROMETHEUS_PORT: ${PROMETHEUS_PORT:-9090}
+      GRAFANA_PORT: ${GRAFANA_PORT:-3000}
+      ORTHANC_HOST: ${ORTHANC_HOST}
+      PROMETHEUS_HOST: ${PROMETHEUS_HOST}
+      GRAFANA_HOST: ${GRAFANA_HOST}
+      ORTHANC_USER: ${ORTHANC_USER}
+      ORTHANC_PASSWORD: ${ORTHANC_PASSWORD}
+    depends_on:
+      ai-inference:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+  ai-inference:
+    build:
+      context: ./services/ai-inference
+    container_name: ai-inference
+    restart: unless-stopped
+    ports:
+      - "${AI_INFERENCE_PORT:-8100}:8100"
+    environment:
+      MINIO_HOST: ${MINIO_HOST}
+      MINIO_PORT: 9000
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      MINIO_BUCKET: ${MINIO_BUCKET}
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8100/health')"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
