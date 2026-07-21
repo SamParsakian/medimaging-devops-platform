@@ -1019,6 +1019,15 @@ def pipeline_orthanc_get(path):
     return response.json()
 
 
+def pipeline_orthanc_delete(path):
+    response = requests.delete(
+        f"http://{ORTHANC_HOST}:{ORTHANC_HTTP_PORT}{path}",
+        auth=(ORTHANC_USER, ORTHANC_PASSWORD),
+        timeout=15,
+    )
+    response.raise_for_status()
+
+
 def pipeline_to_8bit_pixels(dataset):
     """Same windowing logic as services/preview-generator/generate_preview.py's
     to_8bit_pixels - duplicated here for the same reason as the
@@ -1326,8 +1335,45 @@ def get_pipeline_status():
 
 @app.post("/pipeline/reset")
 def reset_pipeline(request: Request):
-    """Clears the in-memory pipeline demo state, so a newly uploaded
-    DICOM study can be walked through from the first stage again."""
+    """Clears the pipeline demo everywhere it left a trace - Orthanc,
+    Postgres, MinIO, and the /tmp scratch files - not just the in-memory
+    dict. Orthanc dedups by StudyInstanceUID, so re-uploading the same
+    sample DICOM file after a reset would otherwise still look like "no
+    new study" to pipeline_stage_extracted, since the old study would
+    still exist in Orthanc and Postgres from the previous run."""
+    orthanc_study_id = PIPELINE_STATE["orthanc_study_id"]
+    study_uid = PIPELINE_STATE["study_instance_uid"]
+
+    if orthanc_study_id:
+        try:
+            pipeline_orthanc_delete(f"/studies/{orthanc_study_id}")
+        except requests.RequestException:
+            pass  # already gone, or Orthanc unreachable - nothing more to clean up there
+
+        client = get_minio_client()
+        for prefix in (
+            f"processed/anonymized/{study_uid}/",
+            f"processed/previews/{study_uid}/",
+        ):
+            try:
+                for obj in client.list_objects(MINIO_BUCKET, prefix=prefix, recursive=True):
+                    client.remove_object(MINIO_BUCKET, obj.object_name)
+            except S3Error:
+                pass
+
+        conn = get_connection()
+        try:
+            with conn:
+                with conn.cursor() as cur:
+                    cur.execute("DELETE FROM ai_results WHERE orthanc_study_id = %s", (orthanc_study_id,))
+                    cur.execute("DELETE FROM studies WHERE orthanc_study_id = %s", (orthanc_study_id,))
+        finally:
+            conn.close()
+
+    for path in (PIPELINE_STATE["anonymized_path"], PIPELINE_STATE["preview_path"]):
+        if path and os.path.exists(path):
+            os.remove(path)
+
     PIPELINE_STATE.update({
         "orthanc_study_id": None,
         "study_instance_uid": None,
