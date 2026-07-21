@@ -5,3 +5,6 @@ minio
 prometheus-client
 requests
 python-multipart
+pydicom
+numpy
+Pillow

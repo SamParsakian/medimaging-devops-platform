@@ -19,6 +19,9 @@ htmlcov/
 .env.*
 !.env.example
 !.env.production.example
+!.env.data-node.example
+!.env.app-node.example
+!.env.ops-node.example
 *.pem
 *.key
 secrets/
@@ -87,3 +90,7 @@ services/preview-generator/output/
 scripts/backup/output/
 
 Screenshots/
+
+# --- Real multi-node Prometheus config (has a real private IP in it, see
+# infra/monitoring/prometheus/prometheus.multi-node.example.yml) ---
+infra/monitoring/prometheus/prometheus.multi-node.yml

@@ -78,29 +78,16 @@
     </main>
   </div>
 
+  <script src="auth.js"></script>
   <script>
     const studiesList = document.getElementById("studies-list");
     const detailSection = document.getElementById("study-detail");
     const auditBody = document.getElementById("audit-events-body");
-    const apiKey = new URLSearchParams(window.location.search).get("api_key") || "";
-
-    // Sidebar links are plain hrefs in the HTML - carry the key forward so
-    // clicking between pages doesn't land on one that then fails every
-    // fetch it makes (every dashboard page needs its own ?api_key=...).
-    if (apiKey) {
-      for (const link of document.querySelectorAll(".nav-links a")) {
-        link.href += (link.href.includes("?") ? "&" : "?") + `api_key=${encodeURIComponent(apiKey)}`;
-      }
-    }
+    const apiKey = window.API_KEY || "";
     const initialStudy = new URLSearchParams(window.location.search).get("study");
 
     function apiFetch(url) {
       return fetch(url, { headers: { "X-API-Key": apiKey } });
-    }
-
-    function withApiKey(url) {
-      const separator = url.includes("?") ? "&" : "?";
-      return apiKey ? `${url}${separator}api_key=${encodeURIComponent(apiKey)}` : url;
     }
 
     function statusPill(status) {
@@ -215,7 +202,7 @@
           const status = reviewedFlags[i] ? "reviewed" : s.workflow_status;
           return `
             <div class="study-row" data-study-id="${s.orthanc_study_id}">
-              <img class="thumb" src="${withApiKey(`/studies/${s.orthanc_study_id}/preview-image`)}" alt="" />
+              <img class="thumb" src="/studies/${s.orthanc_study_id}/preview-image" alt="" />
               <div class="study-row-main">
                 <div class="study-row-id">${s.orthanc_study_id}</div>
                 <div class="study-row-desc">${s.study_description ?? ""}</div>
@@ -250,7 +237,7 @@
       ]);
 
       const previewBlock = previewInfo.available
-        ? `<img class="preview-image" src="${withApiKey(`/studies/${studyId}/preview-image`)}" alt="X-ray for ${studyId}" />`
+        ? `<img class="preview-image" src="/studies/${studyId}/preview-image" alt="X-ray for ${studyId}" />`
         : `<p class="placeholder">No image available for this study.</p>`;
 
       let resultBlock = `
@@ -258,14 +245,14 @@
         <button class="btn-primary" id="run-ai-btn" type="button" ${previewInfo.available ? "" : "disabled"}>Run AI Evaluation</button>
         <div id="run-ai-status"></div>
       `;
-      if (aiResults.length > 0) {
+      if (study.workflow_status !== "awaiting_review" && aiResults.length > 0) {
         const result = aiResults[0];
         const bucket = confidenceBucket(result.confidence);
         const findingsRows = (result.top_findings ?? [])
           .map((f) => `<tr><td>${f.label}</td><td>${(f.probability * 100).toFixed(1)}%</td></tr>`)
           .join("");
         const heatmapBlock = result.heatmap_object
-          ? `<img class="heatmap-image" src="${withApiKey(`/studies/${studyId}/ai-results/${result.result_id}/heatmap-image`)}" alt="AI heatmap for ${studyId}" />`
+          ? `<img class="heatmap-image" src="/studies/${studyId}/ai-results/${result.result_id}/heatmap-image" alt="AI heatmap for ${studyId}" />`
           : `<p class="placeholder">No heatmap for this result.</p>`;
 
         resultBlock = `

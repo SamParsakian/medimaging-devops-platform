@@ -14,13 +14,16 @@ import time
 import uuid
 from datetime import datetime, timezone
 
+import numpy as np
 import psycopg2
+import pydicom
 import requests
 from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from minio import Minio
 from minio.error import S3Error
+from PIL import Image
 from prometheus_client import CONTENT_TYPE_LATEST, Counter, Gauge, Histogram, generate_latest
 from psycopg2.extras import Json
 
@@ -84,6 +87,25 @@ ORTHANC_HTTP_PORT = os.environ.get("ORTHANC_HTTP_PORT", "8042")
 PROMETHEUS_PORT = os.environ.get("PROMETHEUS_PORT", "9090")
 GRAFANA_PORT = os.environ.get("GRAFANA_PORT", "3000")
 
+# Where the API's own backend actually reaches each service for the Ops
+# Dashboard's reachability check (build_ops_links below) - separate from
+# APP_NODE_HOST/DATA_NODE_HOST/OPS_NODE_HOST above, which are the public
+# addresses a browser uses. On one machine these default to the Compose
+# service names (see docker-compose.yml's "api" environment block); on a
+# real multi-node deployment (Step 29) they're set to each node's private
+# network address instead, so the check travels over the private network
+# rather than back out over the public internet.
+ORTHANC_HOST = os.environ.get("ORTHANC_HOST", "orthanc")
+PROMETHEUS_HOST = os.environ.get("PROMETHEUS_HOST", "prometheus")
+GRAFANA_HOST = os.environ.get("GRAFANA_HOST", "grafana")
+
+# Step 29 addition: the real DICOM pipeline demo (see build_pipeline_status
+# below) needs the API to talk to Orthanc's own REST API directly, not just
+# check it's reachable - so it needs real credentials, unlike ORTHANC_HOST
+# above which was reachability-check only until now.
+ORTHANC_USER = os.environ.get("ORTHANC_USER", "orthanc")
+ORTHANC_PASSWORD = os.environ.get("ORTHANC_PASSWORD", "changeme")
+
 # This platform's safety rule is "no real patient data, ever" - every
 # study it ever holds is demo/anonymized data by design, so PatientID
 # is always safe to expose here.
@@ -100,18 +122,20 @@ DEMO_USER_ID = "demo-user"
 APP_SETTINGS = {"auto_ai_default": True}
 
 # Demo-grade security: one shared API key from the environment, checked
-# against either the X-API-Key header or an api_key query parameter (the
-# query param exists so a browser can load /dashboard/?api_key=... directly).
+# against the X-API-Key header, an api_key query parameter, or an api_key
+# cookie (Step 29: the dashboard now sets this cookie once via auth.js
+# instead of carrying the key in the URL - the query param stays supported
+# as a one-time bootstrap for an old bookmarked link, and for curl/scripts).
 API_SECRET_KEY = os.environ.get("API_SECRET_KEY", "changeme")
 PUBLIC_PATHS = {"/health", "/docs", "/openapi.json", "/redoc", "/metrics"}
-# The dashboard's shared stylesheet and background image (Step 28) are
-# loaded by the browser itself, not by this project's own fetch() calls -
-# a <link rel="stylesheet"> tag and a CSS url() never carry the page's own
-# ?api_key= query string or an X-API-Key header, only the page navigation
-# itself does. Neither file holds any patient/study data, so they're public
-# the same way /docs already is, instead of needing every dashboard page to
-# go back to inlining its CSS (the workaround Step 10 used before this).
-PUBLIC_PATH_PREFIXES = ("/dashboard/theme.css", "/dashboard/images/")
+# The whole /dashboard/ static mount is public (Step 29) - it's a separate
+# StaticFiles mount from every real data endpoint below (/studies,
+# /audit-events, /ai-results, and the rest all live at the top level, still
+# fully protected), so serving its HTML/CSS/JS without a key first leaks no
+# study or patient data. It has to be public for auth.js to even run: on a
+# first visit with no api_key cookie yet, the page itself would otherwise
+# 401 before its own script had a chance to prompt for the key and set one.
+PUBLIC_PATH_PREFIXES = ("/dashboard/",)
 
 app = FastAPI(title="Medical Imaging Study API")
 
@@ -129,7 +153,11 @@ async def require_api_key(request: Request, call_next):
     path = request.url.path
 
     if path not in PUBLIC_PATHS and not path.startswith(PUBLIC_PATH_PREFIXES):
-        provided_key = request.headers.get("X-API-Key") or request.query_params.get("api_key")
+        provided_key = (
+            request.headers.get("X-API-Key")
+            or request.query_params.get("api_key")
+            or request.cookies.get("api_key")
+        )
 
         if not provided_key:
             REQUEST_COUNT.labels(method=method, path=path, status_code="401").inc()
@@ -392,18 +420,16 @@ def update_settings(request: Request, auto_ai_default: bool = Body(..., embed=Tr
 
 
 def build_ops_links():
-    """The Ops Dashboard's link list (Step 28 addition, prepared ahead of
-    Step 29's real multi-node deployment). Each entry's "url" (what the
-    browser opens) comes from APP_NODE_HOST/DATA_NODE_HOST/OPS_NODE_HOST -
-    grouped by which node each service is planned to run on, so pointing
-    this at three real VPS nodes later only means changing those three
-    env vars, not this list. "check_url" is separate on purpose: it uses
-    Docker Compose's own internal service names (minio, orthanc, etc.),
-    since "localhost" inside the api container means the container
-    itself, not the host - the same host machine's own published ports
-    aren't reachable that way from inside another container. Once Step 29
-    moves these onto real separate VPS nodes, check_url and url converge
-    to the same address anyway."""
+    """The Ops Dashboard's link list (Step 28 addition). Each entry's "url"
+    (what the browser opens) comes from APP_NODE_HOST/DATA_NODE_HOST/
+    OPS_NODE_HOST - grouped by which node each service runs on. Each one
+    points at the specific page worth seeing, not just the service's home
+    page (Step 29) - the bucket browser, the DICOM explorer, Prometheus's
+    targets list, and the AI inference Grafana dashboard. "check_url" is
+    separate on purpose: it's where the API's own backend reaches each
+    service from inside its own node, which is MINIO_HOST/ORTHANC_HOST/
+    PROMETHEUS_HOST/GRAFANA_HOST - Compose service names on one machine,
+    each node's private network address on the real Step 29 deployment."""
     return [
         {
             "name": "API Docs", "node": "app", "description": "Swagger UI for this API",
@@ -412,23 +438,23 @@ def build_ops_links():
         },
         {
             "name": "MinIO Console", "node": "data", "description": "Object storage browser",
-            "url": f"http://{DATA_NODE_HOST}:{MINIO_CONSOLE_PORT}",
-            "check_url": "http://minio:9001",
+            "url": f"http://{DATA_NODE_HOST}:{MINIO_CONSOLE_PORT}/browser/{MINIO_BUCKET}",
+            "check_url": f"http://{MINIO_HOST}:9001",
         },
         {
             "name": "Orthanc Explorer", "node": "data", "description": "DICOM server",
-            "url": f"http://{DATA_NODE_HOST}:{ORTHANC_HTTP_PORT}",
-            "check_url": "http://orthanc:8042",
+            "url": f"http://{DATA_NODE_HOST}:{ORTHANC_HTTP_PORT}/app/explorer.html",
+            "check_url": f"http://{ORTHANC_HOST}:{ORTHANC_HTTP_PORT}",
         },
         {
             "name": "Prometheus", "node": "ops", "description": "Metrics and alerts",
-            "url": f"http://{OPS_NODE_HOST}:{PROMETHEUS_PORT}",
-            "check_url": "http://prometheus:9090",
+            "url": f"http://{OPS_NODE_HOST}:{PROMETHEUS_PORT}/targets",
+            "check_url": f"http://{PROMETHEUS_HOST}:9090",
         },
         {
             "name": "Grafana", "node": "ops", "description": "Monitoring dashboards",
-            "url": f"http://{OPS_NODE_HOST}:{GRAFANA_PORT}",
-            "check_url": "http://grafana:3000",
+            "url": f"http://{OPS_NODE_HOST}:{GRAFANA_PORT}/d/ai-inference-overview",
+            "check_url": f"http://{GRAFANA_HOST}:3000",
         },
     ]
 
@@ -930,6 +956,410 @@ def list_audit_events(study_id: str | None = None):
     finally:
         conn.close()
     return [row_to_audit_event(row) for row in rows]
+
+
+
+# --- Step 29: real DICOM pipeline stepper -----------------------------
+#
+# Every earlier X-ray demo in this project (Steps 21-28) fed the AI model
+# a preview image that already existed - it never showed the actual
+# DICOM -> Orthanc -> anonymize -> preview -> MinIO pipeline that Steps
+# 1-18 built, running against a real remote deployment. This section
+# lets one DICOM study, already uploaded to Orthanc by hand (through its
+# own web interface, not this API), be walked through that pipeline one
+# stage at a time from the dashboard's home page - each stage is a real
+# action against Orthanc, Postgres, or MinIO, not a simulation.
+#
+# State is a single in-memory dict, the same demo-grade pattern as
+# APP_SETTINGS above - one pipeline run at a time, reset if the api
+# container restarts. That matches how this is actually used: one DICOM
+# file, walked through by hand, during a demo recording.
+
+PIPELINE_STAGE_ORDER = ["extracted", "anonymized", "preview", "dicom_uploaded", "preview_uploaded", "inference"]
+PIPELINE_STAGE_LABELS = {
+    "extracted": "Study Found & Metadata Saved",
+    "anonymized": "DICOM Anonymized",
+    "preview": "Preview Generated",
+    "dicom_uploaded": "Anonymized DICOM Stored in MinIO",
+    "preview_uploaded": "Preview Stored in MinIO",
+    "inference": "AI Inference + Heatmap",
+}
+PIPELINE_SCRATCH_DIR = "/tmp/pipeline-scratch"
+
+# Duplicated from services/anonymizer/rules.py - the api container can't
+# import that service's module directly (separate image, separate
+# dependencies), so the same small rule set is kept here instead.
+PIPELINE_ANONYMIZATION_RULES = {
+    "PatientName": "Anonymous^Demo",
+    "PatientID": "ANON0001",
+    "PatientBirthDate": "",
+    "AccessionNumber": "",
+    "InstitutionName": "Demo Institution",
+    "ReferringPhysicianName": "",
+}
+
+PIPELINE_STATE = {
+    "orthanc_study_id": None,
+    "study_instance_uid": None,
+    "first_instance_id": None,
+    "anonymized_path": None,
+    "preview_path": None,
+    "completed": [],
+    "details": {},
+}
+
+
+def pipeline_orthanc_get(path):
+    response = requests.get(
+        f"http://{ORTHANC_HOST}:{ORTHANC_HTTP_PORT}{path}",
+        auth=(ORTHANC_USER, ORTHANC_PASSWORD),
+        timeout=15,
+    )
+    response.raise_for_status()
+    return response.json()
+
+
+def pipeline_to_8bit_pixels(dataset):
+    """Same windowing logic as services/preview-generator/generate_preview.py's
+    to_8bit_pixels - duplicated here for the same reason as the
+    anonymization rules above."""
+    pixels = dataset.pixel_array.astype(np.float64)
+
+    slope = float(getattr(dataset, "RescaleSlope", 1))
+    intercept = float(getattr(dataset, "RescaleIntercept", 0))
+    pixels = pixels * slope + intercept
+
+    center = getattr(dataset, "WindowCenter", None)
+    width = getattr(dataset, "WindowWidth", None)
+    if isinstance(center, pydicom.multival.MultiValue):
+        center = center[0]
+    if isinstance(width, pydicom.multival.MultiValue):
+        width = width[0]
+
+    if center is not None and width is not None:
+        low = float(center) - float(width) / 2
+        high = float(center) + float(width) / 2
+    else:
+        low = pixels.min()
+        high = pixels.max()
+
+    pixels = np.clip(pixels, low, high)
+    if high > low:
+        pixels = (pixels - low) / (high - low) * 255.0
+    else:
+        pixels = np.zeros_like(pixels)
+
+    return pixels.astype(np.uint8)
+
+
+def pipeline_stage_extracted():
+    """Mirrors services/metadata-extractor/extract.py: that script finds
+    every study currently in Orthanc and saves each one's metadata to
+    Postgres in a single run. This stage does the same two things for
+    one study, one at a time, so each can be a separate stop here."""
+    study_ids = pipeline_orthanc_get("/studies")
+
+    conn = get_connection()
+    try:
+        with conn.cursor() as cur:
+            cur.execute("SELECT orthanc_study_id FROM studies")
+            known_ids = {row[0] for row in cur.fetchall()}
+    finally:
+        conn.close()
+
+    candidates = [study_id for study_id in study_ids if study_id not in known_ids]
+    if not candidates:
+        raise HTTPException(
+            status_code=404,
+            detail="No new study found in Orthanc - upload a DICOM file through Orthanc's own web interface first.",
+        )
+
+    orthanc_study_id = candidates[0]
+    PIPELINE_STATE["orthanc_study_id"] = orthanc_study_id
+
+    study = pipeline_orthanc_get(f"/studies/{orthanc_study_id}")
+    main_tags = study.get("MainDicomTags", {})
+    patient_tags = study.get("PatientMainDicomTags", {})
+    series_ids = study.get("Series", [])
+
+    series_instance_uid = None
+    modality = None
+    instance_count = 0
+    first_instance_id = None
+    for index, series_id in enumerate(series_ids):
+        series = pipeline_orthanc_get(f"/series/{series_id}")
+        instance_ids = series.get("Instances", [])
+        instance_count += len(instance_ids)
+        if index == 0:
+            series_tags = series.get("MainDicomTags", {})
+            series_instance_uid = series_tags.get("SeriesInstanceUID")
+            modality = series_tags.get("Modality")
+            if instance_ids:
+                first_instance_id = instance_ids[0]
+
+    study_instance_uid = main_tags.get("StudyInstanceUID")
+    study_date_raw = main_tags.get("StudyDate")
+    study_date = None
+    if study_date_raw:
+        try:
+            study_date = datetime.strptime(study_date_raw, "%Y%m%d").date()
+        except ValueError:
+            study_date = None
+
+    conn = get_connection()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    INSERT INTO studies (
+                        orthanc_study_id, study_instance_uid, series_instance_uid,
+                        patient_id, patient_name, modality, study_date, study_description,
+                        series_count, instance_count, processing_status, last_error, updated_at,
+                        workflow_status
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'done', NULL, now(), 'received')
+                    ON CONFLICT (orthanc_study_id) DO UPDATE SET
+                        study_instance_uid = EXCLUDED.study_instance_uid,
+                        series_instance_uid = EXCLUDED.series_instance_uid,
+                        patient_id = EXCLUDED.patient_id,
+                        patient_name = EXCLUDED.patient_name,
+                        modality = EXCLUDED.modality,
+                        study_date = EXCLUDED.study_date,
+                        study_description = EXCLUDED.study_description,
+                        series_count = EXCLUDED.series_count,
+                        instance_count = EXCLUDED.instance_count,
+                        processing_status = 'done',
+                        last_error = NULL,
+                        updated_at = now()
+                    """,
+                    (
+                        orthanc_study_id, study_instance_uid, series_instance_uid,
+                        patient_tags.get("PatientID"), patient_tags.get("PatientName"), modality,
+                        study_date, main_tags.get("StudyDescription"),
+                        len(series_ids), instance_count,
+                    ),
+                )
+    finally:
+        conn.close()
+
+    PIPELINE_STATE["study_instance_uid"] = study_instance_uid
+    PIPELINE_STATE["first_instance_id"] = first_instance_id
+    return {
+        "orthanc_study_id": orthanc_study_id,
+        "patient_id": patient_tags.get("PatientID"),
+        "modality": modality,
+        "study_description": main_tags.get("StudyDescription"),
+    }
+
+
+def pipeline_stage_anonymized():
+    instance_id = PIPELINE_STATE["first_instance_id"]
+    response = requests.get(
+        f"http://{ORTHANC_HOST}:{ORTHANC_HTTP_PORT}/instances/{instance_id}/file",
+        auth=(ORTHANC_USER, ORTHANC_PASSWORD),
+        timeout=20,
+    )
+    response.raise_for_status()
+    dataset = pydicom.dcmread(io.BytesIO(response.content))
+
+    for tag, replacement in PIPELINE_ANONYMIZATION_RULES.items():
+        if not hasattr(dataset, tag) and replacement == "":
+            continue
+        setattr(dataset, tag, replacement)
+
+    os.makedirs(PIPELINE_SCRATCH_DIR, exist_ok=True)
+    filename = f"anonymized_{PIPELINE_STATE['orthanc_study_id']}.dcm"
+    output_path = os.path.join(PIPELINE_SCRATCH_DIR, filename)
+    dataset.save_as(output_path)
+
+    conn = get_connection()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE studies SET anonymization_status = %s, updated_at = now() WHERE study_instance_uid = %s",
+                    ("done", PIPELINE_STATE["study_instance_uid"]),
+                )
+    finally:
+        conn.close()
+
+    PIPELINE_STATE["anonymized_path"] = output_path
+    return {"anonymized_filename": filename}
+
+
+def pipeline_stage_preview():
+    dataset = pydicom.dcmread(PIPELINE_STATE["anonymized_path"])
+    pixels = pipeline_to_8bit_pixels(dataset)
+
+    filename = f"preview_{PIPELINE_STATE['orthanc_study_id']}.png"
+    output_path = os.path.join(PIPELINE_SCRATCH_DIR, filename)
+    Image.fromarray(pixels).save(output_path)
+
+    conn = get_connection()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE studies SET preview_status = %s, updated_at = now() WHERE study_instance_uid = %s",
+                    ("done", PIPELINE_STATE["study_instance_uid"]),
+                )
+    finally:
+        conn.close()
+
+    PIPELINE_STATE["preview_path"] = output_path
+    return {"preview_filename": filename}
+
+
+def pipeline_stage_dicom_uploaded():
+    """Mirrors services/minio-uploader/upload.py: uploads the anonymized
+    DICOM file to MinIO. A separate, independent script from the preview
+    upload below - it has no involvement in storing the preview PNG."""
+    study_uid = PIPELINE_STATE["study_instance_uid"]
+    client = get_minio_client()
+    if not client.bucket_exists(MINIO_BUCKET):
+        client.make_bucket(MINIO_BUCKET)
+
+    anonymized_path = PIPELINE_STATE["anonymized_path"]
+    anonymized_object = f"processed/anonymized/{study_uid}/{os.path.basename(anonymized_path)}"
+    client.fput_object(MINIO_BUCKET, anonymized_object, anonymized_path)
+
+    return {"minio_anonymized_object": anonymized_object}
+
+
+def pipeline_stage_preview_uploaded():
+    """Mirrors services/preview-generator/upload_preview.py: uploads the
+    preview PNG to MinIO. A separate, independent script from the DICOM
+    upload above - it has no involvement in storing the anonymized DICOM."""
+    study_uid = PIPELINE_STATE["study_instance_uid"]
+    client = get_minio_client()
+    if not client.bucket_exists(MINIO_BUCKET):
+        client.make_bucket(MINIO_BUCKET)
+
+    preview_path = PIPELINE_STATE["preview_path"]
+    preview_object = f"processed/previews/{study_uid}/{os.path.basename(preview_path)}"
+    client.fput_object(MINIO_BUCKET, preview_object, preview_path)
+
+    conn = get_connection()
+    try:
+        with conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "UPDATE studies SET preview_object_path = %s, upload_status = %s, updated_at = now() "
+                    "WHERE study_instance_uid = %s",
+                    (preview_object, "done", study_uid),
+                )
+    finally:
+        conn.close()
+
+    return {"minio_preview_object": preview_object}
+
+
+def pipeline_stage_inference():
+    orthanc_study_id = PIPELINE_STATE["orthanc_study_id"]
+    study = fetch_study(orthanc_study_id)
+    object_path = study["preview_object_path"]
+    if not object_path:
+        raise HTTPException(status_code=404, detail="No preview available yet - run the earlier stages first.")
+
+    # Same Upload Review Policy (APP_SETTINGS["auto_ai_default"], see
+    # review.html's toggle) that governs the Step 28 clinic upload also
+    # governs this last pipeline stage - when it's off, AI evaluation stays
+    # the doctor's call, run from Doctor Review's "Run AI Evaluation"
+    # button (POST /studies/{id}/infer), not something "Next" does for them.
+    if not APP_SETTINGS["auto_ai_default"]:
+        set_workflow_status(orthanc_study_id, "awaiting_review")
+        return {"awaiting_doctor_review": True}
+
+    ai_response = requests.post(
+        f"http://{AI_INFERENCE_HOST}:{AI_INFERENCE_PORT}/infer",
+        json={"object_path": object_path},
+        timeout=10,
+    )
+    if ai_response.status_code != 200:
+        try:
+            detail = ai_response.json().get("detail", "AI inference service returned an error")
+        except ValueError:
+            detail = "AI inference service returned an error"
+        raise HTTPException(status_code=ai_response.status_code, detail=detail)
+
+    result = ai_response.json()
+    result_id = store_ai_result(orthanc_study_id, result)
+    set_workflow_status(orthanc_study_id, "ready_for_review")
+    return {
+        "prediction_label": result.get("prediction_label"),
+        "confidence": result.get("confidence"),
+        "heatmap_object": result.get("heatmap_object"),
+        "result_id": result_id,
+    }
+
+
+PIPELINE_STAGE_FUNCTIONS = {
+    "extracted": pipeline_stage_extracted,
+    "anonymized": pipeline_stage_anonymized,
+    "preview": pipeline_stage_preview,
+    "dicom_uploaded": pipeline_stage_dicom_uploaded,
+    "preview_uploaded": pipeline_stage_preview_uploaded,
+    "inference": pipeline_stage_inference,
+}
+
+
+def pipeline_status_payload():
+    return {
+        "stages": [
+            {
+                "key": key,
+                "label": PIPELINE_STAGE_LABELS[key],
+                "done": key in PIPELINE_STATE["completed"],
+                "detail": PIPELINE_STATE["details"].get(key),
+            }
+            for key in PIPELINE_STAGE_ORDER
+        ],
+        "orthanc_study_id": PIPELINE_STATE["orthanc_study_id"],
+        "next_stage": next((k for k in PIPELINE_STAGE_ORDER if k not in PIPELINE_STATE["completed"]), None),
+    }
+
+
+@app.get("/pipeline/status")
+def get_pipeline_status():
+    return pipeline_status_payload()
+
+
+@app.post("/pipeline/reset")
+def reset_pipeline(request: Request):
+    """Clears the in-memory pipeline demo state, so a newly uploaded
+    DICOM study can be walked through from the first stage again."""
+    PIPELINE_STATE.update({
+        "orthanc_study_id": None,
+        "study_instance_uid": None,
+        "first_instance_id": None,
+        "anonymized_path": None,
+        "preview_path": None,
+        "completed": [],
+        "details": {},
+    })
+    log_audit_event(request, "reset_pipeline", None, "success")
+    return pipeline_status_payload()
+
+
+@app.post("/pipeline/next")
+def pipeline_next(request: Request):
+    next_stage = next((k for k in PIPELINE_STAGE_ORDER if k not in PIPELINE_STATE["completed"]), None)
+    if next_stage is None:
+        raise HTTPException(status_code=400, detail="Pipeline already complete for this study.")
+
+    try:
+        detail = PIPELINE_STAGE_FUNCTIONS[next_stage]()
+    except HTTPException:
+        log_audit_event(request, f"pipeline_{next_stage}", PIPELINE_STATE.get("orthanc_study_id"), "error")
+        raise
+    except Exception as exc:
+        log_audit_event(request, f"pipeline_{next_stage}", PIPELINE_STATE.get("orthanc_study_id"), "error")
+        raise HTTPException(status_code=500, detail=f"Pipeline stage '{next_stage}' failed: {exc}") from exc
+
+    PIPELINE_STATE["completed"].append(next_stage)
+    PIPELINE_STATE["details"][next_stage] = detail
+    log_audit_event(request, f"pipeline_{next_stage}", PIPELINE_STATE.get("orthanc_study_id"), "success")
+    return pipeline_status_payload()
 
 
 app.mount("/dashboard", StaticFiles(directory="static", html=True), name="dashboard")

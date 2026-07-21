@@ -10,32 +10,34 @@
       min-height: 100vh;
     }
 
-    /* A fixed-aspect-ratio box, matching the source image's own 1672x941
-       shape, sized to the viewport's width. The nav is positioned as a
-       percentage of *this* box, not the page - so it always lands in the
-       same spot on the image itself (below the logo, above the headline)
-       no matter how tall or narrow the actual browser window is. A plain
-       "cover" background on the body cropped the sides on a tall window,
-       cutting off both the headline and the CT machine - caught on a real
-       screen and fixed by anchoring everything to the image's own shape
-       instead of guessing at viewport-relative percentages. */
+    /* A fixed-aspect-ratio box, matching the source image's own 2900x1044
+       shape, sized to the viewport's width - so the imagery on the right
+       side of the picture stays framed the same way no matter how tall or
+       narrow the actual browser window is. The brand mark and nav are real
+       HTML (not baked into the image), positioned as a percentage of this
+       box and placed in the empty space on the image's left side. */
     .hero {
       position: relative;
       width: 100%;
-      aspect-ratio: 1672 / 941;
-      background-image: url("images/medsyn-home-hero.jpg");
+      aspect-ratio: 2900 / 1044;
+      background-image: url("images/medsyn-home-hero-bg.png");
       background-size: 100% 100%;
       background-repeat: no-repeat;
     }
 
+    .home-brand {
+      position: absolute;
+      top: 8%;
+      left: 4.5%;
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
     .home-nav {
       position: absolute;
-      /* Sits directly under the logo baked into the image (the logo
-         itself ends around 11.5% down), the same tight logo-then-nav
-         stacking the real sidebar uses on the other three pages - not
-         floating further down near the headline text. */
-      top: 12.5%;
-      left: 6.2%;
+      top: 24%;
+      left: 4.5%;
       display: flex;
       flex-direction: column;
       gap: 0.4rem;
@@ -65,10 +67,134 @@
       width: 1.1rem;
       text-align: center;
     }
+
+    .home-content {
+      max-width: 1100px;
+      margin: 0 auto;
+      padding: 1.75rem 2rem 3rem;
+    }
+
+    /* Pipeline stepper - one flat row of same-format circles, all ten
+       real pipeline steps in order. No progress line: each circle just
+       flips from white to blue, left to right, one per "Next" click. */
+    .pipeline-track {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: 1.75rem 1.25rem;
+      margin: 2rem 0;
+    }
+
+    .pipeline-stop {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+      width: 110px;
+    }
+
+    .pipeline-marker {
+      width: 40px;
+      height: 40px;
+      border-radius: 50%;
+      background: var(--card-bg);
+      border: 2px solid var(--card-border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 1rem;
+      font-weight: 600;
+      color: var(--text-secondary);
+      cursor: pointer;
+      padding: 0;
+      font-family: inherit;
+      transition: background 0.3s ease, border-color 0.3s ease, color 0.3s ease;
+    }
+
+    .pipeline-marker:hover {
+      border-color: var(--accent);
+    }
+
+    .pipeline-stop.done .pipeline-marker {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+
+    .pipeline-stop.active .pipeline-marker {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    .pipeline-label {
+      margin-top: 0.6rem;
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--text-primary);
+    }
+
+    .pipeline-detail {
+      margin-top: 0.25rem;
+      font-size: 0.7rem;
+      color: var(--text-secondary);
+      word-break: break-word;
+      min-height: 1em;
+    }
+
+    .pipeline-controls {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      margin-top: 0.5rem;
+    }
+
+    /* One shared pop-up, dynamically repositioned (via JS) to sit at the
+       top-right corner of whichever circle is hovered/clicked - wide
+       rather than narrow, so the text wraps to 2-3 lines instead of a
+       tall, cramped column. */
+    #pipeline-card {
+      position: relative;
+    }
+
+    .pipeline-info-panel {
+      display: none;
+      position: absolute;
+      width: 480px;
+      max-width: min(480px, 85vw);
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 10px;
+      padding: 1rem 1.15rem;
+      font-size: 1.44rem;
+      line-height: 1.35;
+      color: var(--text-secondary);
+      text-align: left;
+      box-shadow: 0 10px 28px rgba(0, 0, 0, 0.4);
+      z-index: 20;
+      backdrop-filter: blur(10px);
+    }
+
+    .pipeline-info-panel.open {
+      display: block;
+    }
+
+    .pipeline-info-panel .panel-title {
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: var(--text-primary);
+      margin-bottom: 0.4rem;
+    }
   </style>
 </head>
 <body>
   <div class="hero">
+    <div class="home-brand">
+      <div class="brand-icon">&#9737;</div>
+      <div>
+        <div class="brand-name">MedSyn Lab</div>
+        <div class="brand-subtitle">Radiology Imaging Center</div>
+      </div>
+    </div>
     <nav class="home-nav">
       <a href="/dashboard/studies.html" data-page><span class="icon">&#127968;</span> Studies</a>
       <a href="/dashboard/upload.html" data-page><span class="icon">&#9729;</span> Upload</a>
@@ -77,19 +203,293 @@
     </nav>
   </div>
 
+  <div class="home-content">
+    <section class="card" id="pipeline-card">
+      <h2>DICOM Pipeline Demo</h2>
+      <div class="pipeline-info-panel" id="pipeline-info-panel"></div>
+      <p class="page-subtitle">
+        This mirrors a real hospital imaging pipeline, stage by stage - a real hospital
+        uses different (often proprietary) software for the same jobs, but the shape
+        is the same.
+      </p>
+      <p class="page-subtitle">
+        Upload one DICOM file through Orthanc's own web interface, then click "Next Step"
+        to walk it through. Hover (or tap) any step's number to see the real script that
+        performs that job.
+      </p>
+      <div class="pipeline-track" id="pipeline-track"></div>
+      <div class="pipeline-controls">
+        <button class="btn-primary" id="pipeline-next-btn" type="button">Next Step</button>
+        <button class="btn-secondary" id="pipeline-reset-btn" type="button">Reset</button>
+        <span id="pipeline-message" class="page-subtitle" style="margin: 0;"></span>
+      </div>
+    </section>
+  </div>
+
+  <script src="auth.js"></script>
   <script>
-    // Every other dashboard page needs ?api_key=... in its own URL (it's
-    // how the page's own JS authenticates its API calls, see theme.css's
-    // sibling pages) - a plain href without it would land on a real page
-    // that then fails every fetch it makes. Carrying the key forward here
-    // is the same idea as withApiKey() on the other three pages, just for
-    // whole-page navigation instead of an <img> or <a> built by JS.
-    const apiKey = new URLSearchParams(window.location.search).get("api_key") || "";
-    if (apiKey) {
-      for (const link of document.querySelectorAll("a[data-page]")) {
-        link.href += `?api_key=${encodeURIComponent(apiKey)}`;
+    const apiKey = window.API_KEY || "";
+
+    function apiFetch(url, options) {
+      const opts = options || {};
+      opts.headers = Object.assign({ "X-API-Key": apiKey }, opts.headers || {});
+      return fetch(url, opts);
+    }
+
+    // One entry per real-world pipeline step, in order. "real" ones call
+    // the API (services/api/main.py's pipeline_stage_* functions, each
+    // mirroring one independent real script - see docs/local-stack.md).
+    // "cosmetic" ones are steps that happen before this page (the actual
+    // upload) or after it (on other pages) - there's no API call to make
+    // for them here, so a click just advances them visually in the same
+    // left-to-right sequence.
+    const PIPELINE_DEFS = [
+      {
+        key: "upload", kind: "cosmetic", label: "Upload DICOM",
+        text: "The X-ray is sent to Orthanc as a DICOM file - the same DICOM transfer a real scanner uses to reach a hospital's PACS. Here it's uploaded by hand, standing in for that scanner.",
+      },
+      {
+        key: "orthanc_store", kind: "cosmetic", label: "Study Stored in Orthanc",
+        text: "Orthanc, the project's PACS, stores the study, its series, and its instance, and exposes them over its own REST API for every step that follows.",
+      },
+      {
+        key: "extracted", kind: "real", label: "Study Found & Metadata Saved",
+        text: "services/metadata-extractor/extract.py reads new studies from Orthanc's REST API and saves their DICOM tags (patient ID, modality, description, and more) into the studies table in Postgres.",
+      },
+      {
+        key: "anonymized", kind: "real", label: "DICOM Anonymized",
+        text: "services/anonymizer/anonymize.py replaces identifying DICOM tags - PatientName, PatientID, and more (see rules.py) - with fixed demo values.",
+      },
+      {
+        key: "preview", kind: "real", label: "Preview Generated",
+        text: "services/preview-generator/generate_preview.py windows the DICOM pixel data and writes a viewable PNG preview.",
+      },
+      {
+        key: "dicom_uploaded", kind: "real", label: "Anonymized DICOM Stored in MinIO",
+        text: "services/minio-uploader/upload.py uploads the anonymized DICOM file into the medimaging bucket in MinIO.",
+      },
+      {
+        key: "preview_uploaded", kind: "real", label: "Preview Stored in MinIO",
+        text: "services/preview-generator/upload_preview.py uploads the PNG preview into the medimaging bucket in MinIO.",
+      },
+      {
+        key: "inference", kind: "real", label: "AI Inference + Heatmap",
+        text: "services/ai-inference/main.py runs the TorchXRayVision model on the preview and returns finding probabilities plus a heatmap. Technical demo only - not for clinical diagnosis.",
+      },
+      {
+        key: "review", kind: "cosmetic", label: "Doctor Review + Audit",
+        text: "services/api/main.py serves the study to the Doctor Review page (review.html) and logs every view and action to the audit_events table.",
+      },
+      {
+        key: "ops", kind: "cosmetic", label: "Monitoring / Ops View",
+        text: "Prometheus scrapes the API's /metrics endpoint; Grafana (infra/monitoring) visualizes request rates, AI inference latency, and service health.",
+      },
+    ];
+
+    // Steps 0-1 are the "before" cosmetic pair, 2-7 are the six real,
+    // API-backed stages, 8-9 are the "after" cosmetic pair - fixed
+    // positions since PIPELINE_DEFS is a fixed, ordered list.
+    const REAL_START = 2;
+    const REAL_END = 8; // exclusive
+
+    let beforeDone = 0;
+    let afterDone = 0;
+    let backendStatus = null;
+
+    function backendStageFor(key) {
+      if (!backendStatus) return null;
+      return backendStatus.stages.find((s) => s.key === key) || null;
+    }
+
+    function realDetailText(key, stage) {
+      if (!stage || !stage.detail) return "";
+      const d = stage.detail;
+      switch (key) {
+        case "extracted":
+          return `Orthanc study ${d.orthanc_study_id} - ${d.modality || ""} - ${d.study_description || ""}`;
+        case "anonymized":
+          return d.anonymized_filename;
+        case "preview":
+          return d.preview_filename;
+        case "dicom_uploaded":
+          return d.minio_anonymized_object;
+        case "preview_uploaded":
+          return d.minio_preview_object;
+        case "inference":
+          return d.awaiting_doctor_review
+            ? "Awaiting doctor - run AI from Doctor Review"
+            : `${d.prediction_label} (${(d.confidence * 100).toFixed(1)}%)`;
+        default:
+          return "";
       }
     }
+
+    function computeStates() {
+      const allRealDone = !!backendStatus && backendStatus.next_stage === null;
+      return PIPELINE_DEFS.map((def, index) => {
+        if (index < REAL_START) {
+          return { def, done: index < beforeDone, detail: "" };
+        }
+        if (index < REAL_END) {
+          const stage = backendStageFor(def.key);
+          return { def, done: !!(stage && stage.done), detail: realDetailText(def.key, stage) };
+        }
+        return { def, done: allRealDone && index - REAL_END < afterDone, detail: "" };
+      });
+    }
+
+    const infoPanel = document.getElementById("pipeline-info-panel");
+    const pipelineCard = document.getElementById("pipeline-card");
+
+    // Anchors the panel's bottom-left corner to the hovered circle's
+    // top-right corner, flipping to the other side/below when that
+    // would push it outside the card.
+    function positionInfoPanel(marker) {
+      const cardRect = pipelineCard.getBoundingClientRect();
+      const markerRect = marker.getBoundingClientRect();
+      const gap = 10;
+      const panelWidth = infoPanel.offsetWidth;
+      const panelHeight = infoPanel.offsetHeight;
+
+      let left = markerRect.right - cardRect.left + gap;
+      if (left + panelWidth > cardRect.width) {
+        left = markerRect.left - cardRect.left - panelWidth - gap;
+      }
+      if (left < 0) left = 0;
+
+      let top = markerRect.top - cardRect.top - panelHeight - gap;
+      if (top < 0) {
+        top = markerRect.bottom - cardRect.top + gap;
+      }
+
+      infoPanel.style.left = `${left}px`;
+      infoPanel.style.top = `${top}px`;
+    }
+
+    function showInfoPanel(index, marker) {
+      const def = PIPELINE_DEFS[index];
+      infoPanel.innerHTML = `<div class="panel-title">${def.label}</div>${def.text}`;
+      infoPanel.classList.add("open");
+      positionInfoPanel(marker);
+    }
+
+    function hideInfoPanel() {
+      infoPanel.classList.remove("open");
+    }
+
+    document.addEventListener("mouseover", (event) => {
+      const marker = event.target.closest(".pipeline-marker");
+      if (marker) showInfoPanel(Number(marker.dataset.stepIndex), marker);
+    });
+
+    document.addEventListener("mouseout", (event) => {
+      const marker = event.target.closest(".pipeline-marker");
+      if (marker) hideInfoPanel();
+    });
+
+    document.addEventListener("click", (event) => {
+      const marker = event.target.closest(".pipeline-marker");
+      if (marker) {
+        showInfoPanel(Number(marker.dataset.stepIndex), marker);
+        return;
+      }
+      if (!event.target.closest(".pipeline-info-panel")) {
+        hideInfoPanel();
+      }
+    });
+
+    function renderAll() {
+      const states = computeStates();
+      const firstNotDone = states.findIndex((s) => !s.done);
+
+      const track = document.getElementById("pipeline-track");
+      track.innerHTML = states
+        .map((s, index) => {
+          const isActive = index === firstNotDone;
+          const cls = `pipeline-stop ${s.done ? "done" : ""} ${isActive ? "active" : ""}`.trim();
+          const marker = s.done ? "&#10003;" : index + 1;
+          return `
+            <div class="${cls}">
+              <button class="pipeline-marker" type="button" data-step-index="${index}">${marker}</button>
+              <div class="pipeline-label">${s.def.label}</div>
+              <div class="pipeline-detail">${s.detail}</div>
+            </div>
+          `;
+        })
+        .join("");
+
+      const nextBtn = document.getElementById("pipeline-next-btn");
+      if (firstNotDone === -1) {
+        nextBtn.textContent = "Pipeline Complete";
+        nextBtn.disabled = true;
+      } else {
+        nextBtn.textContent = `Next: ${states[firstNotDone].def.label}`;
+        nextBtn.disabled = false;
+      }
+    }
+
+    async function loadPipelineStatus() {
+      const response = await apiFetch("/pipeline/status");
+      backendStatus = await response.json();
+      // If the server already has real progress (e.g. this page was
+      // reloaded mid-walkthrough), the "before" pair must logically be
+      // done too - keeps the blue run contiguous from the very start.
+      if (backendStatus.stages.some((s) => s.done)) {
+        beforeDone = 2;
+      }
+      renderAll();
+    }
+
+    document.getElementById("pipeline-next-btn").addEventListener("click", async () => {
+      const states = computeStates();
+      const firstNotDone = states.findIndex((s) => !s.done);
+      if (firstNotDone === -1) return;
+
+      if (firstNotDone < REAL_START) {
+        beforeDone++;
+        renderAll();
+        return;
+      }
+      if (firstNotDone >= REAL_END) {
+        afterDone++;
+        renderAll();
+        return;
+      }
+
+      const btn = document.getElementById("pipeline-next-btn");
+      const msg = document.getElementById("pipeline-message");
+      btn.disabled = true;
+      msg.textContent = "Running...";
+      msg.classList.remove("error-text");
+      try {
+        const response = await apiFetch("/pipeline/next", { method: "POST" });
+        const data = await response.json();
+        if (!response.ok) {
+          msg.textContent = data.detail || "Step failed";
+          msg.classList.add("error-text");
+          btn.disabled = false;
+          return;
+        }
+        msg.textContent = "";
+        backendStatus = data;
+        renderAll();
+      } catch (err) {
+        msg.textContent = "Could not reach the API.";
+        msg.classList.add("error-text");
+        btn.disabled = false;
+      }
+    });
+
+    document.getElementById("pipeline-reset-btn").addEventListener("click", async () => {
+      const response = await apiFetch("/pipeline/reset", { method: "POST" });
+      backendStatus = await response.json();
+      beforeDone = 0;
+      afterDone = 0;
+      document.getElementById("pipeline-message").textContent = "";
+      renderAll();
+    });
+
+    loadPipelineStatus();
   </script>
 </body>
 </html>

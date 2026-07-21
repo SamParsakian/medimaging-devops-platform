@@ -53,26 +53,13 @@
     </main>
   </div>
 
+  <script src="auth.js"></script>
   <script>
-    const apiKey = new URLSearchParams(window.location.search).get("api_key") || "";
-
-    // Sidebar links are plain hrefs in the HTML - carry the key forward so
-    // clicking between pages doesn't land on one that then fails every
-    // fetch it makes (every dashboard page needs its own ?api_key=...).
-    if (apiKey) {
-      for (const link of document.querySelectorAll(".nav-links a")) {
-        link.href += (link.href.includes("?") ? "&" : "?") + `api_key=${encodeURIComponent(apiKey)}`;
-      }
-    }
+    const apiKey = window.API_KEY || "";
     let selectedFile = null;
 
     function apiFetch(url) {
       return fetch(url, { headers: { "X-API-Key": apiKey } });
-    }
-
-    function withApiKey(url) {
-      const separator = url.includes("?") ? "&" : "?";
-      return apiKey ? `${url}${separator}api_key=${encodeURIComponent(apiKey)}` : url;
     }
 
     function statusPill(status) {
@@ -161,13 +148,13 @@
           const buttonLabel = status === "reviewed" ? "Result" : "Open";
           return `
             <div class="study-row">
-              <img class="thumb" src="${withApiKey(`/studies/${s.orthanc_study_id}/preview-image`)}" alt="" />
+              <img class="thumb" src="/studies/${s.orthanc_study_id}/preview-image" alt="" />
               <div class="study-row-main">
                 <div class="study-row-id">${s.orthanc_study_id}</div>
                 <div class="study-row-desc">${s.study_description ?? ""}</div>
               </div>
               ${statusPill(status)}
-              <a class="btn btn-secondary" href="/dashboard/review.html?api_key=${encodeURIComponent(apiKey)}&study=${s.orthanc_study_id}">${buttonLabel}</a>
+              <a class="btn btn-secondary" href="/dashboard/review.html?study=${s.orthanc_study_id}">${buttonLabel}</a>
             </div>
           `;
         })
