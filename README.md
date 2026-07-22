@@ -8,11 +8,7 @@ This is a technical demo, not a clinical product. Every study it holds is sample
 
 ## Demo video
 
-<a href="https://www.youtube.com/watch?v=REPLACE_WITH_VIDEO_ID">
-  <img src="assets/demo-video-thumbnail.png" alt="Watch the demo video" width="100%" />
-</a>
-
-*Video not published yet.* Once it's up: drop the thumbnail image in as `assets/demo-video-thumbnail.png`, and swap `REPLACE_WITH_VIDEO_ID` above for the real YouTube video ID. The `width="100%"` keeps the thumbnail stretched across the full README width.
+[![Watch the Medical Imaging DevOps Platform Demo](https://img.youtube.com/vi/5ZmylnoyiTs/maxresdefault.jpg)](https://youtu.be/5ZmylnoyiTs)
 
 ## What's inside
 
